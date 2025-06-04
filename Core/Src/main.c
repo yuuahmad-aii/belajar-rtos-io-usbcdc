@@ -41,6 +41,19 @@ typedef struct {
 #define NUM_INPUTS 8
 #define NUM_SR_OUTPUTS 13 // Jumlah output melalui Shift Register
 
+#define BLINKING_LED_SR_OUTPUT_INDEX 14 // Output ke-0 dari SR untuk LED berkedip
+
+// Default blinking times
+#define DEFAULT_BLINK_OFF_MS 1000 // 1 detik
+#define DEFAULT_BLINK_ON_MS  500  // 0.5 detik
+
+// Alamat Flash untuk menyimpan konfigurasi delay LED berkedip
+// Pastikan alamat ini berada di area Flash yang tidak digunakan oleh program Anda
+// Untuk STM32F103CBT6 (128KB Flash), page size 1KB. Pilih page dekat akhir.
+#define BLINK_CONFIG_FLASH_PAGE_ADDR  ((uint32_t)0x0801F000) // Alamat awal page untuk konfigurasi blink
+#define BLINK_OFF_TIME_OFFSET       0   // Offset untuk delay OFF dari awal page
+#define BLINK_ON_TIME_OFFSET        4   // Offset untuk delay ON (setelah delay OFF, uint32_t = 4 bytes)
+
 /* USER CODE END PD */
 
 /* Private macro -------------------------------------------------------------*/
@@ -65,6 +78,13 @@ const osThreadAttr_t OutputCtrlTask_attributes = {
   .stack_size = 192 * 4,
   .priority = (osPriority_t) osPriorityNormal,
 };
+/* Definitions for TimerOliTask */
+osThreadId_t TimerOliTaskHandle;
+const osThreadAttr_t TimerOliTask_attributes = {
+  .name = "TimerOliTask",
+  .stack_size = 192 * 4,
+  .priority = (osPriority_t) osPriorityHigh,
+};
 /* Definitions for OutputCmdQueue */
 osMessageQueueId_t OutputCmdQueueHandle;
 const osMessageQueueAttr_t OutputCmdQueue_attributes = {
@@ -88,6 +108,10 @@ static uint16_t current_sr_output_state = 0x0000; // Semua output mati awalnya
 
 char usb_rx_buffer[16];
 
+// Variabel untuk durasi kedip LED (dalam milidetik)
+static uint32_t g_blinking_led_off_time_ms = DEFAULT_BLINK_OFF_MS;
+static uint32_t g_blinking_led_on_time_ms = DEFAULT_BLINK_ON_MS;
+
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
@@ -96,12 +120,17 @@ static void MX_GPIO_Init(void);
 static void MX_SPI1_Init(void);
 void StartInputScanTask(void *argument);
 void StartOutputControlTask(void *argument);
+void StartTimerOliTask(void *argument);
 
 /* USER CODE BEGIN PFP */
 void InputScanTask_Entry(void *argument);
 void OutputControlTask_Entry(void *argument);
 static void SR_UpdateOutputs(void);
 static void SR_Init(void);
+static uint32_t Flash_Read_Blinker_Word(uint32_t address);
+static HAL_StatusTypeDef Flash_Write_Blinker_Config(uint32_t off_time_ms,
+		uint32_t on_time_ms);
+static void Load_Blinker_Config_From_Flash(void);
 /* USER CODE END PFP */
 
 /* Private user code ---------------------------------------------------------*/
@@ -154,8 +183,13 @@ int main(void)
   MX_GPIO_Init();
   MX_SPI1_Init();
   /* USER CODE BEGIN 2 */
+	Load_Blinker_Config_From_Flash(); // Muat konfigurasi blinker dari Flash
 	SR_Init(); // Inisialisasi shift register ke keadaan mati
 	printf("Sistem dimulai... Kontrol 13 output via 74HC595 (SPI)\r\n");
+	printf(
+			"LED Berkedip (dari Flash/Default): Output %d, ON: %lu ms, OFF: %lu ms\r\n",
+			BLINKING_LED_SR_OUTPUT_INDEX, g_blinking_led_on_time_ms,
+			g_blinking_led_off_time_ms);
   /* USER CODE END 2 */
 
   /* Init scheduler */
@@ -188,8 +222,27 @@ int main(void)
   /* creation of OutputCtrlTask */
   OutputCtrlTaskHandle = osThreadNew(StartOutputControlTask, NULL, &OutputCtrlTask_attributes);
 
+  /* creation of TimerOliTask */
+  TimerOliTaskHandle = osThreadNew(StartTimerOliTask, NULL, &TimerOliTask_attributes);
+
   /* USER CODE BEGIN RTOS_THREADS */
 	/* add threads, ... */
+  if (InputScanTaskHandle == NULL) {
+    printf("FATAL Error: Gagal membuat InputScanTask!\r\n");
+    Error_Handler();
+  }
+
+  if (OutputCtrlTaskHandle == NULL) {
+    printf("FATAL Error: Gagal membuat OutputControlTask!\r\n");
+    Error_Handler();
+  }
+
+  if (TimerOliTaskHandle == NULL) {
+    // Ini yang paling mungkin terjadi jika heap habis
+    printf("FATAL Error: Gagal membuat BlinkingLedTask! (Cek configTOTAL_HEAP_SIZE)\r\n");
+    Error_Handler();
+  }
+
   /* USER CODE END RTOS_THREADS */
 
   /* USER CODE BEGIN RTOS_EVENTS */
@@ -361,6 +414,115 @@ static void MX_GPIO_Init(void)
 /* USER CODE BEGIN 4 */
 
 /**
+ * @brief  Membaca satu word (32-bit) dari alamat Flash.
+ * @param  address: Alamat Flash yang akan dibaca.
+ * @retval Nilai yang tersimpan di alamat tersebut.
+ */
+static uint32_t Flash_Read_Blinker_Word(uint32_t address) {
+	return *(volatile uint32_t*) address;
+}
+
+/**
+ * @brief  Menulis konfigurasi delay blinker ke Flash.
+ * Fungsi ini akan menghapus satu page Flash dan menulis kedua nilai delay.
+ * @param  off_time_ms: Waktu LED mati dalam milidetik.
+ * @param  on_time_ms: Waktu LED menyala dalam milidetik.
+ * @retval HAL_StatusTypeDef: Status operasi Flash.
+ */
+static HAL_StatusTypeDef Flash_Write_Blinker_Config(uint32_t off_time_ms,
+		uint32_t on_time_ms) {
+	HAL_StatusTypeDef status = HAL_OK;
+	FLASH_EraseInitTypeDef EraseInitStruct;
+	uint32_t PageError = 0;
+
+	status = HAL_FLASH_Unlock(); // Unlock Flash untuk operasi tulis/hapus
+	if (status != HAL_OK) {
+		printf("Error: Gagal unlock Flash! (%d)\r\n", status);
+		return status;
+	}
+
+	// Konfigurasi untuk menghapus page
+	EraseInitStruct.TypeErase = FLASH_TYPEERASE_PAGES;
+	EraseInitStruct.PageAddress = BLINK_CONFIG_FLASH_PAGE_ADDR;
+	EraseInitStruct.NbPages = 1;
+
+	// Hapus page
+	status = HAL_FLASHEx_Erase(&EraseInitStruct, &PageError);
+
+	if (status == HAL_OK) {
+		// Tulis nilai OFF time
+		status = HAL_FLASH_Program(FLASH_TYPEPROGRAM_WORD,
+		BLINK_CONFIG_FLASH_PAGE_ADDR + BLINK_OFF_TIME_OFFSET, off_time_ms);
+		if (status != HAL_OK) {
+			printf("Error: Gagal menulis OFF time ke Flash! (%d)\r\n", status);
+			HAL_FLASH_Lock();
+			return status;
+		}
+
+		// Tulis nilai ON time
+		status = HAL_FLASH_Program(FLASH_TYPEPROGRAM_WORD,
+		BLINK_CONFIG_FLASH_PAGE_ADDR + BLINK_ON_TIME_OFFSET, on_time_ms);
+		if (status != HAL_OK) {
+			printf("Error: Gagal menulis ON time ke Flash! (%d)\r\n", status);
+		}
+	} else {
+		printf(
+				"Error: Gagal menghapus page Flash untuk blink config (PageError: 0x%lX, Status: %d)!\r\n",
+				PageError, status);
+	}
+
+	HAL_FLASH_Lock(); // Lock Flash kembali
+	return status;
+}
+
+/**
+ * @brief  Memuat konfigurasi delay blinker dari Flash ke variabel global.
+ * Jika Flash kosong atau data tidak valid, gunakan nilai default dan tulis ke Flash.
+ */
+static void Load_Blinker_Config_From_Flash(void) {
+	uint32_t stored_off_time = Flash_Read_Blinker_Word(
+	BLINK_CONFIG_FLASH_PAGE_ADDR + BLINK_OFF_TIME_OFFSET);
+	uint32_t stored_on_time = Flash_Read_Blinker_Word(
+	BLINK_CONFIG_FLASH_PAGE_ADDR + BLINK_ON_TIME_OFFSET);
+	uint8_t write_defaults_to_flash = 0;
+
+	// 0xFFFFFFFF adalah nilai umum untuk Flash yang terhapus (belum ditulis)
+	// Nilai 0 juga bisa dianggap tidak valid untuk durasi.
+	if (stored_off_time == 0xFFFFFFFF || stored_off_time == 0) {
+		g_blinking_led_off_time_ms = DEFAULT_BLINK_OFF_MS;
+		write_defaults_to_flash = 1;
+		printf(
+				"Info: Waktu OFF LED dari Flash tidak valid, menggunakan default: %lu ms\r\n",
+				g_blinking_led_off_time_ms);
+	} else {
+		g_blinking_led_off_time_ms = stored_off_time;
+	}
+
+	if (stored_on_time == 0xFFFFFFFF || stored_on_time == 0) {
+		g_blinking_led_on_time_ms = DEFAULT_BLINK_ON_MS;
+		write_defaults_to_flash = 1;
+		printf(
+				"Info: Waktu ON LED dari Flash tidak valid, menggunakan default: %lu ms\r\n",
+				g_blinking_led_on_time_ms);
+	} else {
+		g_blinking_led_on_time_ms = stored_on_time;
+	}
+
+	if (write_defaults_to_flash) {
+		printf(
+				"Info: Menulis konfigurasi blinker awal/default ke Flash...\r\n");
+		if (Flash_Write_Blinker_Config(g_blinking_led_off_time_ms,
+				g_blinking_led_on_time_ms) == HAL_OK) {
+			printf(
+					"Info: Konfigurasi blinker default berhasil ditulis ke Flash.\r\n");
+		} else {
+			printf(
+					"Error: Gagal menulis konfigurasi blinker default ke Flash saat startup.\r\n");
+		}
+	}
+}
+
+/**
  * @brief  Inisialisasi output shift register ke keadaan mati.
  */
 static void SR_Init(void) {
@@ -394,7 +556,7 @@ static void SR_UpdateOutputs(void) {
 		printf("SPI Transmit Error SR1\r\n");
 	}
 
-	HAL_GPIO_WritePin(HC595_LOAD_GPIO_Port, HC595_LOAD_Pin, GPIO_PIN_SET);// Latch HIGH (data masuk ke output)
+	HAL_GPIO_WritePin(HC595_LOAD_GPIO_Port, HC595_LOAD_Pin, GPIO_PIN_SET); // Latch HIGH (data masuk ke output)
 	HAL_GPIO_WritePin(HC595_LOAD_GPIO_Port, HC595_LOAD_Pin, GPIO_PIN_RESET); // Latch LOW kembali (siap untuk data berikutnya)
 }
 
@@ -403,13 +565,64 @@ void USB_CDC_RxHandler(uint8_t *Buf, uint32_t Len) {
 		memcpy(usb_rx_buffer, Buf, Len);
 		usb_rx_buffer[Len] = '\0';
 
-		// Perinta	h output adalah satu karakter 'A' - 'Z'
 		if (Len == 1 && usb_rx_buffer[0] >= 'A' && usb_rx_buffer[0] <= 'Z') {
 			OutputCommand_t cmd_msg;
 			cmd_msg.command = usb_rx_buffer[0];
 			if (osMessageQueuePut(OutputCmdQueueHandle, &cmd_msg, 0U, 0U)
 					!= osOK) {
 				printf("Error: Gagal mengirim perintah output ke queue.\r\n");
+			}
+		} else if (strncmp(usb_rx_buffer, "$1=", 3) == 0) // Perintah untuk Waktu OFF LED Berkedip
+				{
+			char *value_str = usb_rx_buffer + 3;
+			long val_seconds = atol(value_str);
+			if (val_seconds > 0 && val_seconds <= 3600) { // Batasi hingga 1 jam (3600 detik)
+				uint32_t new_off_time_ms = (uint32_t) val_seconds * 1000;
+				if (new_off_time_ms != g_blinking_led_off_time_ms) {
+					g_blinking_led_off_time_ms = new_off_time_ms;
+					printf(
+							"Info: Waktu OFF LED Berkedip diatur ke %lu ms ($1=%ld). Menyimpan ke Flash...\r\n",
+							g_blinking_led_off_time_ms, val_seconds);
+					if (Flash_Write_Blinker_Config(g_blinking_led_off_time_ms,
+							g_blinking_led_on_time_ms) != HAL_OK) {
+						printf(
+								"Error: Gagal menyimpan konfigurasi blinker ke Flash setelah update $1.\r\n");
+					}
+				} else {
+					printf(
+							"Info: Waktu OFF LED Berkedip tidak berubah ($1=%ld).\r\n",
+							val_seconds);
+				}
+			} else {
+				printf(
+						"Error: Nilai $1 tidak valid (%s). Harus antara 1-3600 detik.\r\n",
+						value_str);
+			}
+		} else if (strncmp(usb_rx_buffer, "$2=", 3) == 0) // Perintah untuk Waktu ON LED Berkedip
+				{
+			char *value_str = usb_rx_buffer + 3;
+			long val_seconds = atol(value_str);
+			if (val_seconds > 0 && val_seconds <= 3600) { // Batasi hingga 1 jam
+				uint32_t new_on_time_ms = (uint32_t) val_seconds * 1000;
+				if (new_on_time_ms != g_blinking_led_on_time_ms) {
+					g_blinking_led_on_time_ms = new_on_time_ms;
+					printf(
+							"Info: Waktu ON LED Berkedip diatur ke %lu ms ($2=%ld). Menyimpan ke Flash...\r\n",
+							g_blinking_led_on_time_ms, val_seconds);
+					if (Flash_Write_Blinker_Config(g_blinking_led_off_time_ms,
+							g_blinking_led_on_time_ms) != HAL_OK) {
+						printf(
+								"Error: Gagal menyimpan konfigurasi blinker ke Flash setelah update $2.\r\n");
+					}
+				} else {
+					printf(
+							"Info: Waktu ON LED Berkedip tidak berubah ($2=%ld).\r\n",
+							val_seconds);
+				}
+			} else {
+				printf(
+						"Error: Nilai $2 tidak valid (%s). Harus antara 1-3600 detik.\r\n",
+						value_str);
 			}
 		} else {
 			printf("Perintah serial tidak dikenal: %s\r\n", usb_rx_buffer);
@@ -511,6 +724,31 @@ void StartOutputControlTask(void *argument)
 		}
 	}
   /* USER CODE END StartOutputControlTask */
+}
+
+/* USER CODE BEGIN Header_StartTimerOliTask */
+/**
+ * @brief Function implementing the TimerOliTask thread.
+ * @param argument: Not used
+ * @retval None
+ */
+/* USER CODE END Header_StartTimerOliTask */
+void StartTimerOliTask(void *argument)
+{
+  /* USER CODE BEGIN StartTimerOliTask */
+	printf("BlinkingLedTask dimulai untuk Output SR %d.\r\n",
+			BLINKING_LED_SR_OUTPUT_INDEX);
+	/* Infinite loop */
+	for (;;) {
+#if defined(USER_LED_Pin) && defined(USER_LED_GPIO_Port)
+    HAL_GPIO_TogglePin(USER_LED_GPIO_Port, USER_LED_Pin); // Tes dengan LED sederhana
+    printf("DEBUG: BlinkingLedTask USER_LED Toggled.\r\n");
+    #else
+    printf("DEBUG: BlinkingLedTask loop berjalan - tidak ada USER_LED untuk tes.\r\n");
+    #endif
+    osDelay(1000); // Delay 1 detik
+	}
+  /* USER CODE END StartTimerOliTask */
 }
 
 /**
