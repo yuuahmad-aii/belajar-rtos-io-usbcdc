@@ -33,8 +33,7 @@
 
 /* Private typedef -----------------------------------------------------------*/
 /* USER CODE BEGIN PTD */
-typedef struct
-{
+typedef struct {
 	char command; // Karakter perintah 'A' - 'Z'
 } OutputCommand_t;
 /* USER CODE END PTD */
@@ -42,6 +41,8 @@ typedef struct
 /* Private define ------------------------------------------------------------*/
 /* USER CODE BEGIN PD */
 // config related defines
+#define FIRMWARE_VERSION "1.0.0"  // Versi firmware
+#define DEBUG_MODE 0			  // 0 = non-debug, 1 = debug
 #define MODBUS_VERBOSE 0		  // 0 = non-verbose, 1 = verbose
 #define MODBUS_SLAVE_ID 0x01	  // ID slave Modbus RTU
 #define MODBUS_UART_HANDLE huart1 // uart yang digunakan untuk Modbus RTU
@@ -49,6 +50,7 @@ typedef struct
 #define NUM_INPUTS 9			  // Jumlah input digital biasa
 #define NUM_SR_OUTPUTS 13		  // Jumlah output melalui Shift Register
 #define F_CLK_TIM2 72000000UL
+#define DISPLAY_BUFFER_SIZE 4095 // Buffer untuk menampilkan data di USB CDC
 
 #define BLINKING_LED_SR_OUTPUT_INDEX 14 // Output ke-0 dari SR untuk LED berkedip
 #define LINKED_INPUT_INDEX 7			// Input ke-8 (indeks 7)
@@ -128,48 +130,61 @@ UART_HandleTypeDef huart2;
 
 /* Definitions for InputScanTask */
 osThreadId_t InputScanTaskHandle;
-const osThreadAttr_t InputScanTask_attributes = {
-	.name = "InputScanTask",
-	.stack_size = 256 * 4,
-	.priority = (osPriority_t)osPriorityNormal,
-};
+const osThreadAttr_t InputScanTask_attributes = { .name = "InputScanTask",
+		.stack_size = 256 * 4, .priority = (osPriority_t) osPriorityNormal, };
 /* Definitions for OutputCtrlTask */
 osThreadId_t OutputCtrlTaskHandle;
-const osThreadAttr_t OutputCtrlTask_attributes = {
-	.name = "OutputCtrlTask",
-	.stack_size = 192 * 4,
-	.priority = (osPriority_t)osPriorityNormal,
-};
+const osThreadAttr_t OutputCtrlTask_attributes = { .name = "OutputCtrlTask",
+		.stack_size = 192 * 4, .priority = (osPriority_t) osPriorityNormal, };
 /* Definitions for TimerOliTask */
 osThreadId_t TimerOliTaskHandle;
-const osThreadAttr_t TimerOliTask_attributes = {
-	.name = "TimerOliTask",
-	.stack_size = 192 * 4,
-	.priority = (osPriority_t)osPriorityHigh,
-};
+const osThreadAttr_t TimerOliTask_attributes = { .name = "TimerOliTask",
+		.stack_size = 192 * 4, .priority = (osPriority_t) osPriorityHigh, };
 /* Definitions for ModbusSpindle */
 osThreadId_t ModbusSpindleHandle;
-const osThreadAttr_t ModbusSpindle_attributes = {
-	.name = "ModbusSpindle",
-	.stack_size = 348 * 4,
-	.priority = (osPriority_t)osPriorityHigh,
-};
+const osThreadAttr_t ModbusSpindle_attributes = { .name = "ModbusSpindle",
+		.stack_size = 348 * 4, .priority = (osPriority_t) osPriorityHigh, };
 /* Definitions for OutputCmdQueue */
 osMessageQueueId_t OutputCmdQueueHandle;
-const osMessageQueueAttr_t OutputCmdQueue_attributes = {.name =
-															"OutputCmdQueue"};
+const osMessageQueueAttr_t OutputCmdQueue_attributes = { .name =
+		"OutputCmdQueue" };
 /* USER CODE BEGIN PV */
 
 // Array untuk menyimpan konfigurasi pin input
 // Pastikan definisi pin ini (INPUT_PIN_x_Pin dan INPUT_PIN_x_GPIO_Port) ADA di main.h atau didefinisikan di atas
 GPIO_TypeDef *input_ports[NUM_INPUTS] = {
-	ORIENT_OK_GPIO_Port, PROXY_TOOLS_GPIO_Port, PROXY_UMB_A_GPIO_Port,
-	PROXY_UMB_B_GPIO_Port, PROXY_CLAMP_A_GPIO_Port, PROXY_CLAMP_B_GPIO_Port,
-	SENSOR_OLI_GPIO_Port, INPUT_CLAMP_GPIO_Port, INPUT_UNCLAMP_GPIO_Port};
+ORIENT_OK_GPIO_Port, PROXY_TOOLS_GPIO_Port, PROXY_UMB_A_GPIO_Port,
+PROXY_UMB_B_GPIO_Port, PROXY_CLAMP_A_GPIO_Port, PROXY_CLAMP_B_GPIO_Port,
+SENSOR_OLI_GPIO_Port, INPUT_CLAMP_GPIO_Port, INPUT_UNCLAMP_GPIO_Port };
 uint16_t input_pins[NUM_INPUTS] = {
-	ORIENT_OK_Pin, PROXY_TOOLS_Pin, PROXY_UMB_A_Pin,
-	PROXY_UMB_B_Pin, PROXY_CLAMP_A_Pin, PROXY_CLAMP_B_Pin,
-	SENSOR_OLI_Pin, INPUT_CLAMP_Pin, INPUT_UNCLAMP_Pin};
+ORIENT_OK_Pin, PROXY_TOOLS_Pin, PROXY_UMB_A_Pin,
+PROXY_UMB_B_Pin, PROXY_CLAMP_A_Pin, PROXY_CLAMP_B_Pin,
+SENSOR_OLI_Pin, INPUT_CLAMP_Pin, INPUT_UNCLAMP_Pin };
+// Nama pin input untuk $P (sesuaikan dengan urutan di atas)
+const char *input_pin_names[NUM_INPUTS] = { "ORIENT_OK", "PROXY_TOOLS",
+		"PROXY_UMB_A", "PROXY_UMB_B", "PROXY_CLAMP_A", "PROXY_CLAMP_B",
+		"SENSOR_OLI", "INPUT_CLAMP", "INPUT_UNCLAMP" };
+
+const char *input_port_letters[NUM_INPUTS] = { "PB", // Port untuk ORIENT_OK
+		"PB", // Port untuk PROXY_TOOLS
+		"PA", // Port untuk PROXY_UMB_A
+		"PB", // Port untuk PROXY_UMB_B
+		"PB", // Port untuk PROXY_CLAMP_A
+		"PB", // Port untuk PROXY_CLAMP_B
+		"PB", // Port untuk SENSOR_OLI
+		"PB", // Port untuk INPUT_CLAMP
+		"PB"  // Port untuk INPUT_UNCLAMP
+		};
+const int input_port_number[NUM_INPUTS] = { 0,	// ORIENT_OK
+		1,	// PROXY_TOOLS
+		4,	// PROXY_UMB_A
+		10, // PROXY_UMB_B
+		11, // PROXY_CLAMP_A
+		12, // PROXY_CLAMP_B
+		13, // SENSOR_OLI
+		14, // INPUT_CLAMP
+		15	// INPUT_UNCLAMP
+		};
 
 // State untuk 16 bit output shift register (kita gunakan 13 bit)
 static uint16_t current_sr_output_state = 0x0000; // Semua output mati awalnya
@@ -208,6 +223,9 @@ volatile uint32_t g_pwm_cycle_time_raw = 0;	 // Raw capture value for period
 volatile uint32_t g_pwm_pulse_width_raw = 0; // Raw capture value for pulse
 uint32_t actual_rpm_to_send = 0;
 
+// display buffer untuk menampilkan data di USB CDC
+// static char display_buffer[DISPLAY_BUFFER_SIZE];
+
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
@@ -242,6 +260,12 @@ static void Spindle_Modbus_Stop_Hold(uint8_t verbose);
 static void Spindle_Modbus_Stop_Disable(uint8_t verbose);
 static void Spindle_Modbus_Set_Rpm(uint32_t rpm, uint8_t verbose);
 static uint32_t Get_Spindle_RPM_From_PWM(void);
+
+// Fungsi baru untuk menampilkan parameter dan pinout
+// char get_port_letter(GPIO_TypeDef *port);
+// uint8_t get_pin_number(uint16_t pin_mask);
+static void Display_All_Parameters(void);
+static void Display_Pinout_Info(void);
 /* USER CODE END PFP */
 
 /* Private user code ---------------------------------------------------------*/
@@ -257,9 +281,8 @@ static uint32_t Get_Spindle_RPM_From_PWM(void);
 // 	}
 // 	return len;
 // }
-int _write(int file, char *ptr, int len)
-{
-	CDC_Transmit_FS((uint8_t *)ptr, len);
+int _write(int file, char *ptr, int len) {
+	CDC_Transmit_FS((uint8_t*) ptr, len);
 	return len;
 }
 /* USER CODE END 0 */
@@ -268,8 +291,7 @@ int _write(int file, char *ptr, int len)
  * @brief  The application entry point.
  * @retval int
  */
-int main(void)
-{
+int main(void) {
 
 	/* USER CODE BEGIN 1 */
 
@@ -304,12 +326,12 @@ int main(void)
 	HAL_TIM_IC_Start(&htim2, TIM_CHANNEL_2);	// Secondary Channel
 
 	Load_All_Configs_From_Flash(); // Muat konfigurasi blinker dari Flash
-	SR_Init();					   // Inisialisasi shift register ke keadaan mati
-	// printf("Sistem dimulai... Kontrol 13 output via 74HC595 (SPI)\r\n");
-	// printf(
-	// 	"LED Berkedip (dari Flash/Default): Output %d, ON: %lu ms, OFF: %lu ms\r\n",
-	// 	BLINKING_LED_SR_OUTPUT_INDEX, g_blinking_led_on_time_ms,
-	// 	g_blinking_led_off_time_ms);
+	SR_Init();					  // Inisialisasi shift register ke keadaan mati
+								  // printf("Sistem dimulai... Kontrol 13 output via 74HC595 (SPI)\r\n");
+								  // printf(
+								  // 	"LED Berkedip (dari Flash/Default): Output %d, ON: %lu ms, OFF: %lu ms\r\n",
+								  // 	BLINKING_LED_SR_OUTPUT_INDEX, g_blinking_led_on_time_ms,
+								  // 	g_blinking_led_off_time_ms);
 	/* USER CODE END 2 */
 
 	/* Init scheduler */
@@ -330,7 +352,7 @@ int main(void)
 	/* Create the queue(s) */
 	/* creation of OutputCmdQueue */
 	OutputCmdQueueHandle = osMessageQueueNew(16, sizeof(uint16_t),
-											 &OutputCmdQueue_attributes);
+			&OutputCmdQueue_attributes);
 
 	/* USER CODE BEGIN RTOS_QUEUES */
 	/* add queues, ... */
@@ -339,39 +361,36 @@ int main(void)
 	/* Create the thread(s) */
 	/* creation of InputScanTask */
 	InputScanTaskHandle = osThreadNew(StartInputScanTask, NULL,
-									  &InputScanTask_attributes);
+			&InputScanTask_attributes);
 
 	/* creation of OutputCtrlTask */
 	OutputCtrlTaskHandle = osThreadNew(StartOutputControlTask, NULL,
-									   &OutputCtrlTask_attributes);
+			&OutputCtrlTask_attributes);
 
 	/* creation of TimerOliTask */
 	TimerOliTaskHandle = osThreadNew(StartTimerOliTask, NULL,
-									 &TimerOliTask_attributes);
+			&TimerOliTask_attributes);
 
 	/* creation of ModbusSpindle */
 	ModbusSpindleHandle = osThreadNew(StartModbusSpindleTask, NULL,
-									  &ModbusSpindle_attributes);
+			&ModbusSpindle_attributes);
 
 	/* USER CODE BEGIN RTOS_THREADS */
 	/* add threads, ... */
-	if (InputScanTaskHandle == NULL)
-	{
+	if (InputScanTaskHandle == NULL) {
 		printf("FATAL Error: Gagal membuat InputScanTask!\r\n");
 		Error_Handler();
 	}
 
-	if (OutputCtrlTaskHandle == NULL)
-	{
+	if (OutputCtrlTaskHandle == NULL) {
 		printf("FATAL Error: Gagal membuat OutputControlTask!\r\n");
 		Error_Handler();
 	}
 
-	if (TimerOliTaskHandle == NULL)
-	{
+	if (TimerOliTaskHandle == NULL) {
 		// Ini yang paling mungkin terjadi jika heap habis
 		printf(
-			"FATAL Error: Gagal membuat BlinkingLedTask! (Cek configTOTAL_HEAP_SIZE)\r\n");
+				"FATAL Error: Gagal membuat BlinkingLedTask! (Cek configTOTAL_HEAP_SIZE)\r\n");
 		Error_Handler();
 	}
 
@@ -388,8 +407,7 @@ int main(void)
 
 	/* Infinite loop */
 	/* USER CODE BEGIN WHILE */
-	while (1)
-	{
+	while (1) {
 		/* USER CODE END WHILE */
 
 		/* USER CODE BEGIN 3 */
@@ -401,11 +419,10 @@ int main(void)
  * @brief System Clock Configuration
  * @retval None
  */
-void SystemClock_Config(void)
-{
-	RCC_OscInitTypeDef RCC_OscInitStruct = {0};
-	RCC_ClkInitTypeDef RCC_ClkInitStruct = {0};
-	RCC_PeriphCLKInitTypeDef PeriphClkInit = {0};
+void SystemClock_Config(void) {
+	RCC_OscInitTypeDef RCC_OscInitStruct = { 0 };
+	RCC_ClkInitTypeDef RCC_ClkInitStruct = { 0 };
+	RCC_PeriphCLKInitTypeDef PeriphClkInit = { 0 };
 
 	/** Initializes the RCC Oscillators according to the specified parameters
 	 * in the RCC_OscInitTypeDef structure.
@@ -417,27 +434,25 @@ void SystemClock_Config(void)
 	RCC_OscInitStruct.PLL.PLLState = RCC_PLL_ON;
 	RCC_OscInitStruct.PLL.PLLSource = RCC_PLLSOURCE_HSE;
 	RCC_OscInitStruct.PLL.PLLMUL = RCC_PLL_MUL9;
-	if (HAL_RCC_OscConfig(&RCC_OscInitStruct) != HAL_OK)
-	{
+	if (HAL_RCC_OscConfig(&RCC_OscInitStruct) != HAL_OK) {
 		Error_Handler();
 	}
 
 	/** Initializes the CPU, AHB and APB buses clocks
 	 */
-	RCC_ClkInitStruct.ClockType = RCC_CLOCKTYPE_HCLK | RCC_CLOCKTYPE_SYSCLK | RCC_CLOCKTYPE_PCLK1 | RCC_CLOCKTYPE_PCLK2;
+	RCC_ClkInitStruct.ClockType = RCC_CLOCKTYPE_HCLK | RCC_CLOCKTYPE_SYSCLK
+			| RCC_CLOCKTYPE_PCLK1 | RCC_CLOCKTYPE_PCLK2;
 	RCC_ClkInitStruct.SYSCLKSource = RCC_SYSCLKSOURCE_PLLCLK;
 	RCC_ClkInitStruct.AHBCLKDivider = RCC_SYSCLK_DIV1;
 	RCC_ClkInitStruct.APB1CLKDivider = RCC_HCLK_DIV2;
 	RCC_ClkInitStruct.APB2CLKDivider = RCC_HCLK_DIV1;
 
-	if (HAL_RCC_ClockConfig(&RCC_ClkInitStruct, FLASH_LATENCY_2) != HAL_OK)
-	{
+	if (HAL_RCC_ClockConfig(&RCC_ClkInitStruct, FLASH_LATENCY_2) != HAL_OK) {
 		Error_Handler();
 	}
 	PeriphClkInit.PeriphClockSelection = RCC_PERIPHCLK_USB;
 	PeriphClkInit.UsbClockSelection = RCC_USBCLKSOURCE_PLL_DIV1_5;
-	if (HAL_RCCEx_PeriphCLKConfig(&PeriphClkInit) != HAL_OK)
-	{
+	if (HAL_RCCEx_PeriphCLKConfig(&PeriphClkInit) != HAL_OK) {
 		Error_Handler();
 	}
 }
@@ -447,8 +462,7 @@ void SystemClock_Config(void)
  * @param None
  * @retval None
  */
-static void MX_I2C1_Init(void)
-{
+static void MX_I2C1_Init(void) {
 
 	/* USER CODE BEGIN I2C1_Init 0 */
 
@@ -466,8 +480,7 @@ static void MX_I2C1_Init(void)
 	hi2c1.Init.OwnAddress2 = 0;
 	hi2c1.Init.GeneralCallMode = I2C_GENERALCALL_DISABLE;
 	hi2c1.Init.NoStretchMode = I2C_NOSTRETCH_DISABLE;
-	if (HAL_I2C_Init(&hi2c1) != HAL_OK)
-	{
+	if (HAL_I2C_Init(&hi2c1) != HAL_OK) {
 		Error_Handler();
 	}
 	/* USER CODE BEGIN I2C1_Init 2 */
@@ -480,8 +493,7 @@ static void MX_I2C1_Init(void)
  * @param None
  * @retval None
  */
-static void MX_SPI1_Init(void)
-{
+static void MX_SPI1_Init(void) {
 
 	/* USER CODE BEGIN SPI1_Init 0 */
 
@@ -503,8 +515,7 @@ static void MX_SPI1_Init(void)
 	hspi1.Init.TIMode = SPI_TIMODE_DISABLE;
 	hspi1.Init.CRCCalculation = SPI_CRCCALCULATION_DISABLE;
 	hspi1.Init.CRCPolynomial = 10;
-	if (HAL_SPI_Init(&hspi1) != HAL_OK)
-	{
+	if (HAL_SPI_Init(&hspi1) != HAL_OK) {
 		Error_Handler();
 	}
 	/* USER CODE BEGIN SPI1_Init 2 */
@@ -517,16 +528,15 @@ static void MX_SPI1_Init(void)
  * @param None
  * @retval None
  */
-static void MX_TIM2_Init(void)
-{
+static void MX_TIM2_Init(void) {
 
 	/* USER CODE BEGIN TIM2_Init 0 */
 
 	/* USER CODE END TIM2_Init 0 */
 
-	TIM_SlaveConfigTypeDef sSlaveConfig = {0};
-	TIM_IC_InitTypeDef sConfigIC = {0};
-	TIM_MasterConfigTypeDef sMasterConfig = {0};
+	TIM_SlaveConfigTypeDef sSlaveConfig = { 0 };
+	TIM_IC_InitTypeDef sConfigIC = { 0 };
+	TIM_MasterConfigTypeDef sMasterConfig = { 0 };
 
 	/* USER CODE BEGIN TIM2_Init 1 */
 
@@ -537,8 +547,7 @@ static void MX_TIM2_Init(void)
 	htim2.Init.Period = 65535;
 	htim2.Init.ClockDivision = TIM_CLOCKDIVISION_DIV1;
 	htim2.Init.AutoReloadPreload = TIM_AUTORELOAD_PRELOAD_DISABLE;
-	if (HAL_TIM_IC_Init(&htim2) != HAL_OK)
-	{
+	if (HAL_TIM_IC_Init(&htim2) != HAL_OK) {
 		Error_Handler();
 	}
 	sSlaveConfig.SlaveMode = TIM_SLAVEMODE_RESET;
@@ -546,28 +555,25 @@ static void MX_TIM2_Init(void)
 	sSlaveConfig.TriggerPolarity = TIM_INPUTCHANNELPOLARITY_RISING;
 	sSlaveConfig.TriggerPrescaler = TIM_ICPSC_DIV1;
 	sSlaveConfig.TriggerFilter = 0;
-	if (HAL_TIM_SlaveConfigSynchro(&htim2, &sSlaveConfig) != HAL_OK)
-	{
+	if (HAL_TIM_SlaveConfigSynchro(&htim2, &sSlaveConfig) != HAL_OK) {
 		Error_Handler();
 	}
 	sConfigIC.ICPolarity = TIM_INPUTCHANNELPOLARITY_RISING;
 	sConfigIC.ICSelection = TIM_ICSELECTION_DIRECTTI;
 	sConfigIC.ICPrescaler = TIM_ICPSC_DIV1;
 	sConfigIC.ICFilter = 0;
-	if (HAL_TIM_IC_ConfigChannel(&htim2, &sConfigIC, TIM_CHANNEL_1) != HAL_OK)
-	{
+	if (HAL_TIM_IC_ConfigChannel(&htim2, &sConfigIC, TIM_CHANNEL_1) != HAL_OK) {
 		Error_Handler();
 	}
 	sConfigIC.ICPolarity = TIM_INPUTCHANNELPOLARITY_FALLING;
 	sConfigIC.ICSelection = TIM_ICSELECTION_INDIRECTTI;
-	if (HAL_TIM_IC_ConfigChannel(&htim2, &sConfigIC, TIM_CHANNEL_2) != HAL_OK)
-	{
+	if (HAL_TIM_IC_ConfigChannel(&htim2, &sConfigIC, TIM_CHANNEL_2) != HAL_OK) {
 		Error_Handler();
 	}
 	sMasterConfig.MasterOutputTrigger = TIM_TRGO_RESET;
 	sMasterConfig.MasterSlaveMode = TIM_MASTERSLAVEMODE_DISABLE;
-	if (HAL_TIMEx_MasterConfigSynchronization(&htim2, &sMasterConfig) != HAL_OK)
-	{
+	if (HAL_TIMEx_MasterConfigSynchronization(&htim2, &sMasterConfig)
+			!= HAL_OK) {
 		Error_Handler();
 	}
 	/* USER CODE BEGIN TIM2_Init 2 */
@@ -580,8 +586,7 @@ static void MX_TIM2_Init(void)
  * @param None
  * @retval None
  */
-static void MX_USART1_UART_Init(void)
-{
+static void MX_USART1_UART_Init(void) {
 
 	/* USER CODE BEGIN USART1_Init 0 */
 
@@ -598,8 +603,7 @@ static void MX_USART1_UART_Init(void)
 	huart1.Init.Mode = UART_MODE_TX_RX;
 	huart1.Init.HwFlowCtl = UART_HWCONTROL_NONE;
 	huart1.Init.OverSampling = UART_OVERSAMPLING_16;
-	if (HAL_UART_Init(&huart1) != HAL_OK)
-	{
+	if (HAL_UART_Init(&huart1) != HAL_OK) {
 		Error_Handler();
 	}
 	/* USER CODE BEGIN USART1_Init 2 */
@@ -612,8 +616,7 @@ static void MX_USART1_UART_Init(void)
  * @param None
  * @retval None
  */
-static void MX_USART2_UART_Init(void)
-{
+static void MX_USART2_UART_Init(void) {
 
 	/* USER CODE BEGIN USART2_Init 0 */
 
@@ -630,8 +633,7 @@ static void MX_USART2_UART_Init(void)
 	huart2.Init.Mode = UART_MODE_TX_RX;
 	huart2.Init.HwFlowCtl = UART_HWCONTROL_NONE;
 	huart2.Init.OverSampling = UART_OVERSAMPLING_16;
-	if (HAL_UART_Init(&huart2) != HAL_OK)
-	{
+	if (HAL_UART_Init(&huart2) != HAL_OK) {
 		Error_Handler();
 	}
 	/* USER CODE BEGIN USART2_Init 2 */
@@ -644,9 +646,8 @@ static void MX_USART2_UART_Init(void)
  * @param None
  * @retval None
  */
-static void MX_GPIO_Init(void)
-{
-	GPIO_InitTypeDef GPIO_InitStruct = {0};
+static void MX_GPIO_Init(void) {
+	GPIO_InitTypeDef GPIO_InitStruct = { 0 };
 	/* USER CODE BEGIN MX_GPIO_Init_1 */
 
 	/* USER CODE END MX_GPIO_Init_1 */
@@ -684,7 +685,9 @@ static void MX_GPIO_Init(void)
 
 	/*Configure GPIO pins : ORIENT_OK_Pin PROXY_TOOLS_Pin PROXY_UMB_B_Pin PROXY_CLAMP_A_Pin
 	 PROXY_CLAMP_B_Pin SENSOR_OLI_Pin INPUT_CLAMP_Pin INPUT_UNCLAMP_Pin */
-	GPIO_InitStruct.Pin = ORIENT_OK_Pin | PROXY_TOOLS_Pin | PROXY_UMB_B_Pin | PROXY_CLAMP_A_Pin | PROXY_CLAMP_B_Pin | SENSOR_OLI_Pin | INPUT_CLAMP_Pin | INPUT_UNCLAMP_Pin;
+	GPIO_InitStruct.Pin = ORIENT_OK_Pin | PROXY_TOOLS_Pin | PROXY_UMB_B_Pin
+			| PROXY_CLAMP_A_Pin | PROXY_CLAMP_B_Pin | SENSOR_OLI_Pin
+			| INPUT_CLAMP_Pin | INPUT_UNCLAMP_Pin;
 	GPIO_InitStruct.Mode = GPIO_MODE_INPUT;
 	GPIO_InitStruct.Pull = GPIO_PULLUP;
 	HAL_GPIO_Init(GPIOB, &GPIO_InitStruct);
@@ -721,8 +724,7 @@ static void MX_GPIO_Init(void)
  * @param  GPIO_Pin: Pin yang menghasilkan interrupt.
  * @retval None
  */
-void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin)
-{
+void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin) {
 	//	uint32_t current_time = HAL_GetTick();
 
 	if (GPIO_Pin == USER_BTN_Pin) // Ganti dengan nama makro pin tombol 1 Anda
@@ -738,11 +740,10 @@ void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin)
 		}
 #else
 		g_user_btn_debounced_state = (HAL_GPIO_ReadPin(USER_BTN_GPIO_Port,
-													   USER_BTN_Pin) == GPIO_PIN_SET); // both rising_falling
+		USER_BTN_Pin) == GPIO_PIN_SET); // both rising_falling
 		g_user_btn_event_latch = 1;
 #endif
-	}
-	else if (GPIO_Pin == INPUT_CW_Pin) // Ganti dengan nama makro pin tombol 2 Anda
+	} else if (GPIO_Pin == INPUT_CW_Pin) // Ganti dengan nama makro pin tombol 2 Anda
 	{
 #if DEBOUNCE_TIME_MS != 0
 		if ((current_time - g_last_interrupt_time_input_cw) > DEBOUNCE_TIME_MS)
@@ -753,11 +754,10 @@ void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin)
 		}
 #else
 		g_input_cw_debounced_state = (HAL_GPIO_ReadPin(INPUT_CW_GPIO_Port,
-													   INPUT_CW_Pin) == GPIO_PIN_SET); // Contoh toggle
+		INPUT_CW_Pin) == GPIO_PIN_SET); // Contoh toggle
 		g_input_cw_event_latch = 1;
 #endif
-	}
-	else if (GPIO_Pin == INPUT_CCW_Pin) // Ganti dengan nama makro pin tombol 3 Anda
+	} else if (GPIO_Pin == INPUT_CCW_Pin) // Ganti dengan nama makro pin tombol 3 Anda
 	{
 #if DEBOUNCE_TIME_MS != 0
 		if ((current_time - g_last_interrupt_time_input_ccw) > DEBOUNCE_TIME_MS)
@@ -768,7 +768,7 @@ void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin)
 		}
 #else
 		g_input_ccw_debounced_state = (HAL_GPIO_ReadPin(INPUT_CCW_GPIO_Port,
-														INPUT_CCW_Pin) == GPIO_PIN_SET); // Contoh toggle
+		INPUT_CCW_Pin) == GPIO_PIN_SET); // Contoh toggle
 		g_input_ccw_event_latch = 1;
 #endif
 	}
@@ -780,9 +780,8 @@ void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin)
  * @param  address: Alamat Flash yang akan dibaca.
  * @retval Nilai yang tersimpan di alamat tersebut.
  */
-static uint32_t Flash_Read_Config_Word(uint32_t address_offset)
-{
-	return *(volatile uint32_t *)(CONFIG_FLASH_PAGE_ADDR + address_offset);
+static uint32_t Flash_Read_Config_Word(uint32_t address_offset) {
+	return *(volatile uint32_t*) (CONFIG_FLASH_PAGE_ADDR + address_offset);
 }
 
 // static HAL_StatusTypeDef Flash_Write_Config_Word(uint32_t address_offset,
@@ -807,18 +806,16 @@ static uint32_t Flash_Read_Config_Word(uint32_t address_offset)
  */
 
 // Fungsi ini akan menghapus page dan menulis semua konfigurasi yang relevan
-static HAL_StatusTypeDef Flash_Write_All_Known_Configs(void)
-{
+static HAL_StatusTypeDef Flash_Write_All_Known_Configs(void) {
 	HAL_StatusTypeDef status;
 	FLASH_EraseInitTypeDef EraseInitStruct;
 	uint32_t PageError = 0;
 
 	status = HAL_FLASH_Unlock();
-	if (status != HAL_OK)
-	{
+	if (status != HAL_OK) {
 		printf(
-			"Error: Flash Unlock gagal saat menyimpan semua config! (%d)\r\n",
-			status);
+				"Error: Flash Unlock gagal saat menyimpan semua config! (%d)\r\n",
+				status);
 		return status;
 	}
 
@@ -827,51 +824,45 @@ static HAL_StatusTypeDef Flash_Write_All_Known_Configs(void)
 	EraseInitStruct.NbPages = 1;
 	status = HAL_FLASHEx_Erase(&EraseInitStruct, &PageError);
 
-	if (status == HAL_OK)
-	{
+	if (status == HAL_OK) {
 		if (HAL_FLASH_Program(FLASH_TYPEPROGRAM_WORD,
-							  CONFIG_FLASH_PAGE_ADDR + BLINK_OFF_TIME_OFFSET,
-							  g_blinking_led_off_time_ms) != HAL_OK)
+		CONFIG_FLASH_PAGE_ADDR + BLINK_OFF_TIME_OFFSET,
+				g_blinking_led_off_time_ms) != HAL_OK)
 			goto flash_write_error;
 		if (HAL_FLASH_Program(FLASH_TYPEPROGRAM_WORD,
-							  CONFIG_FLASH_PAGE_ADDR + BLINK_ON_TIME_OFFSET,
-							  g_blinking_led_on_time_ms) != HAL_OK)
+		CONFIG_FLASH_PAGE_ADDR + BLINK_ON_TIME_OFFSET,
+				g_blinking_led_on_time_ms) != HAL_OK)
 			goto flash_write_error;
 		if (HAL_FLASH_Program(FLASH_TYPEPROGRAM_WORD,
-							  CONFIG_FLASH_PAGE_ADDR + INPUT_INVERSION_MASK_OFFSET,
-							  (uint32_t)g_input_inversion_mask) != HAL_OK)
+		CONFIG_FLASH_PAGE_ADDR + INPUT_INVERSION_MASK_OFFSET,
+				(uint32_t) g_input_inversion_mask) != HAL_OK)
 			goto flash_write_error;
 		if (HAL_FLASH_Program(FLASH_TYPEPROGRAM_WORD,
-							  CONFIG_FLASH_PAGE_ADDR + SSV_VARIATION_RPM_OFFSET,
-							  (uint32_t)g_ssv_variation_rpm) != HAL_OK)
+		CONFIG_FLASH_PAGE_ADDR + SSV_VARIATION_RPM_OFFSET,
+				(uint32_t) g_ssv_variation_rpm) != HAL_OK)
 			goto flash_write_error;
 		if (HAL_FLASH_Program(FLASH_TYPEPROGRAM_WORD,
-							  CONFIG_FLASH_PAGE_ADDR + SSV_CYCLE_MS_OFFSET, g_ssv_cycle_ms) != HAL_OK)
+		CONFIG_FLASH_PAGE_ADDR + SSV_CYCLE_MS_OFFSET, g_ssv_cycle_ms) != HAL_OK)
 			goto flash_write_error;
 		if (HAL_FLASH_Program(FLASH_TYPEPROGRAM_WORD,
-							  CONFIG_FLASH_PAGE_ADDR + MIN_SPINDLE_RPM_OFFSET,
-							  (uint32_t)g_min_spindle_rpm) != HAL_OK)
+		CONFIG_FLASH_PAGE_ADDR + MIN_SPINDLE_RPM_OFFSET,
+				(uint32_t) g_min_spindle_rpm) != HAL_OK)
 			goto flash_write_error;
 		if (HAL_FLASH_Program(FLASH_TYPEPROGRAM_WORD,
-							  CONFIG_FLASH_PAGE_ADDR + MAX_SPINDLE_RPM_OFFSET,
-							  (uint32_t)g_max_spindle_rpm) != HAL_OK)
+		CONFIG_FLASH_PAGE_ADDR + MAX_SPINDLE_RPM_OFFSET,
+				(uint32_t) g_max_spindle_rpm) != HAL_OK)
 			goto flash_write_error;
-	}
-	else
-	{
+	} else {
 		printf(
-			"Error: Gagal erase page untuk semua config (PageError: 0x%lX, Status: %d)!\r\n",
-			PageError, status);
+				"Error: Gagal erase page untuk semua config (PageError: 0x%lX, Status: %d)!\r\n",
+				PageError, status);
 	}
 	goto flash_write_end;
 
-flash_write_error:
-	status = HAL_ERROR;
-flash_write_end:
-	if (status != HAL_OK && PageError == 0xFFFFFFFF)
-	{
+	flash_write_error: status = HAL_ERROR;
+	flash_write_end: if (status != HAL_OK && PageError == 0xFFFFFFFF) {
 		printf("Error saat menulis salah satu config ke Flash! (%d)\r\n",
-			   status);
+				status);
 	}
 	HAL_FLASH_Lock();
 	return status;
@@ -882,143 +873,112 @@ flash_write_end:
  * Jika Flash kosong atau data tidak valid, gunakan nilai default dan tulis ke Flash.
  */
 
-static void Load_All_Configs_From_Flash(void)
-{
+static void Load_All_Configs_From_Flash(void) {
 	uint32_t stored_val;
 	uint8_t write_defaults_to_flash = 0;
 
 	stored_val = Flash_Read_Config_Word(BLINK_OFF_TIME_OFFSET);
-	if (stored_val == 0xFFFFFFFF || stored_val == 0)
-	{
+	if (stored_val == 0xFFFFFFFF || stored_val == 0) {
 		g_blinking_led_off_time_ms = DEFAULT_BLINK_OFF_MS;
 		write_defaults_to_flash = 1;
-	}
-	else
-	{
+	} else {
 		g_blinking_led_off_time_ms = stored_val;
 	}
 
 	stored_val = Flash_Read_Config_Word(BLINK_ON_TIME_OFFSET);
-	if (stored_val == 0xFFFFFFFF || stored_val == 0)
-	{
+	if (stored_val == 0xFFFFFFFF || stored_val == 0) {
 		g_blinking_led_on_time_ms = DEFAULT_BLINK_ON_MS;
 		write_defaults_to_flash = 1;
-	}
-	else
-	{
+	} else {
 		g_blinking_led_on_time_ms = stored_val;
 	}
 
 	stored_val = Flash_Read_Config_Word(INPUT_INVERSION_MASK_OFFSET);
-	if (stored_val == 0xFFFFFFFF)
-	{
+	if (stored_val == 0xFFFFFFFF) {
 		g_input_inversion_mask = DEFAULT_INPUT_INVERSION_MASK;
 		write_defaults_to_flash = 1;
-	}
-	else
-	{
-		g_input_inversion_mask = (uint8_t)(stored_val & 0xFF);
+	} else {
+		g_input_inversion_mask = (uint8_t) (stored_val & 0xFF);
 	}
 
 	stored_val = Flash_Read_Config_Word(SSV_VARIATION_RPM_OFFSET);
-	if (stored_val == 0xFFFFFFFF)
-	{
+	if (stored_val == 0xFFFFFFFF) {
 		g_ssv_variation_rpm = DEFAULT_SSV_VARIATION_RPM;
 		write_defaults_to_flash = 1;
-	}
-	else
-	{
-		g_ssv_variation_rpm = (uint16_t)(stored_val & 0xFFFF);
+	} else {
+		g_ssv_variation_rpm = (uint16_t) (stored_val & 0xFFFF);
 	}
 
 	stored_val = Flash_Read_Config_Word(SSV_CYCLE_MS_OFFSET);
-	if (stored_val == 0xFFFFFFFF || stored_val == 0)
-	{
+	if (stored_val == 0xFFFFFFFF || stored_val == 0) {
 		g_ssv_cycle_ms = DEFAULT_SSV_CYCLE_MS;
 		write_defaults_to_flash = 1;
-	}
-	else
-	{
+	} else {
 		g_ssv_cycle_ms = stored_val;
 	}
 
 	stored_val = Flash_Read_Config_Word(MIN_SPINDLE_RPM_OFFSET);
-	if (stored_val == 0xFFFFFFFF)
-	{
+	if (stored_val == 0xFFFFFFFF) {
 		g_min_spindle_rpm = DEFAULT_MIN_SPINDLE_RPM;
 		write_defaults_to_flash = 1;
-	}
-	else
-	{
-		g_min_spindle_rpm = (uint16_t)(stored_val & 0xFFFF);
+	} else {
+		g_min_spindle_rpm = (uint16_t) (stored_val & 0xFFFF);
 	}
 
 	stored_val = Flash_Read_Config_Word(MAX_SPINDLE_RPM_OFFSET);
-	if (stored_val == 0xFFFFFFFF || stored_val < g_min_spindle_rpm)
-	{ // Max RPM harus > Min RPM
+	if (stored_val == 0xFFFFFFFF || stored_val < g_min_spindle_rpm) { // Max RPM harus > Min RPM
 		g_max_spindle_rpm = DEFAULT_MAX_SPINDLE_RPM;
 		if (g_max_spindle_rpm < g_min_spindle_rpm)
 			g_max_spindle_rpm = g_min_spindle_rpm + 1000; // Pastikan Max > Min
 		write_defaults_to_flash = 1;
-	}
-	else
-	{
-		g_max_spindle_rpm = (uint16_t)(stored_val & 0xFFFF);
+	} else {
+		g_max_spindle_rpm = (uint16_t) (stored_val & 0xFFFF);
 	}
 
-	if (write_defaults_to_flash)
-	{
+	if (write_defaults_to_flash) {
 		printf(
-			"Info: Satu atau lebih konfigurasi tidak valid/default, menulis ulang semua ke Flash...\r\n");
-		if (Flash_Write_All_Known_Configs() == HAL_OK)
-		{
+				"Info: Satu atau lebih konfigurasi tidak valid/default, menulis ulang semua ke Flash...\r\n");
+		if (Flash_Write_All_Known_Configs() == HAL_OK) {
 			printf("Info: Konfigurasi default berhasil ditulis ke Flash.\r\n");
-		}
-		else
-		{
+		} else {
 			printf(
-				"Error: Gagal menulis konfigurasi default ke Flash saat startup.\r\n");
+					"Error: Gagal menulis konfigurasi default ke Flash saat startup.\r\n");
 		}
 	}
 }
 
-static HAL_StatusTypeDef Save_Input_Inversion_Mask_To_Flash(uint8_t mask)
-{
+static HAL_StatusTypeDef Save_Input_Inversion_Mask_To_Flash(uint8_t mask) {
 	g_input_inversion_mask = mask; // Update RAM copy
 	// Untuk menyimpan hanya satu item, kita perlu membaca yang lain, erase, lalu tulis semua
 	// Atau, jika FEE (Flash Emulated EEPROM) digunakan, itu akan lebih mudah.
 	// Untuk sekarang, kita akan menulis ulang semua config yang diketahui.
 	printf("Info: Menyimpan Input Inversion Mask (0x%02X) ke Flash...\r\n",
-		   g_input_inversion_mask);
+			g_input_inversion_mask);
 	return Flash_Write_All_Known_Configs();
 }
 
-static HAL_StatusTypeDef Save_Blinker_Config_To_Flash(void)
-{
+static HAL_StatusTypeDef Save_Blinker_Config_To_Flash(void) {
 	printf("Info: Menyimpan Blinker Config (ON:%lu, OFF:%lu) ke Flash...\r\n",
-		   g_blinking_led_on_time_ms, g_blinking_led_off_time_ms);
+			g_blinking_led_on_time_ms, g_blinking_led_off_time_ms);
 	return Flash_Write_All_Known_Configs();
 }
 
-static HAL_StatusTypeDef Save_SSV_Config_To_Flash(void)
-{
+static HAL_StatusTypeDef Save_SSV_Config_To_Flash(void) {
 	printf(
-		"Info: Menyimpan SSV Config (Var:%u RPM, Cycle:%lu ms) ke Flash...\r\n",
-		g_ssv_variation_rpm, g_ssv_cycle_ms);
+			"Info: Menyimpan SSV Config (Var:%u RPM, Cycle:%lu ms) ke Flash...\r\n",
+			g_ssv_variation_rpm, g_ssv_cycle_ms);
 	return Flash_Write_All_Known_Configs();
 }
-static HAL_StatusTypeDef Save_RPM_Range_Config_To_Flash(void)
-{
+static HAL_StatusTypeDef Save_RPM_Range_Config_To_Flash(void) {
 	printf("Info: Menyimpan RPM Range (Min:%u, Max:%u) ke Flash...\r\n",
-		   g_min_spindle_rpm, g_max_spindle_rpm);
+			g_min_spindle_rpm, g_max_spindle_rpm);
 	return Flash_Write_All_Known_Configs();
 }
 
 /**
  * @brief  Inisialisasi output shift register ke keadaan mati.
  */
-static void SR_Init(void)
-{
+static void SR_Init(void) {
 	current_sr_output_state = 0x0000; // Semua output mati
 	SR_UpdateOutputs();
 }
@@ -1026,224 +986,216 @@ static void SR_Init(void)
 /**
  * @brief  Mengirim state output saat ini ke shift register 74HC595.
  */
-static void SR_UpdateOutputs(void)
-{
+static void SR_UpdateOutputs(void) {
 	uint8_t bytes_to_send[2];
 
 	// Data untuk 74HC595 kedua (output 8-12, sisanya tidak terpakai jika hanya 13 output)
 	// Bit 8 dari current_sr_output_state -> Q0 dari SR kedua
 	// Bit 12 dari current_sr_output_state -> Q4 dari SR kedua
-	bytes_to_send[0] = (uint8_t)((current_sr_output_state >> 8) & 0xFF);
+	bytes_to_send[0] = (uint8_t) ((current_sr_output_state >> 8) & 0xFF);
 
 	// Data untuk 74HC595 pertama (output 0-7)
 	// Bit 0 dari current_sr_output_state -> Q0 dari SR pertama
 	// Bit 7 dari current_sr_output_state -> Q7 dari SR pertama
-	bytes_to_send[1] = (uint8_t)(current_sr_output_state & 0xFF);
+	bytes_to_send[1] = (uint8_t) (current_sr_output_state & 0xFF);
 
 	HAL_GPIO_WritePin(HC595_LOAD_GPIO_Port, HC595_LOAD_Pin, GPIO_PIN_RESET); // Latch LOW
 
 	// Kirim data: byte untuk SR terjauh dulu, lalu byte untuk SR terdekat
-	if (HAL_SPI_Transmit(&hspi1, &bytes_to_send[0], 1, 100) != HAL_OK)
-	{ // Data untuk SR2
+	if (HAL_SPI_Transmit(&hspi1, &bytes_to_send[0], 1, 100) != HAL_OK) { // Data untuk SR2
 		printf("SPI Transmit Error SR2\r\n");
 	}
-	if (HAL_SPI_Transmit(&hspi1, &bytes_to_send[1], 1, 100) != HAL_OK)
-	{ // Data untuk SR1
+	if (HAL_SPI_Transmit(&hspi1, &bytes_to_send[1], 1, 100) != HAL_OK) { // Data untuk SR1
 		printf("SPI Transmit Error SR1\r\n");
 	}
 
-	HAL_GPIO_WritePin(HC595_LOAD_GPIO_Port, HC595_LOAD_Pin, GPIO_PIN_SET);	 // Latch HIGH (data masuk ke output)
+	HAL_GPIO_WritePin(HC595_LOAD_GPIO_Port, HC595_LOAD_Pin, GPIO_PIN_SET);// Latch HIGH (data masuk ke output)
 	HAL_GPIO_WritePin(HC595_LOAD_GPIO_Port, HC595_LOAD_Pin, GPIO_PIN_RESET); // Latch LOW kembali (siap untuk data berikutnya)
 }
 
-void USB_CDC_RxHandler(uint8_t *Buf, uint32_t Len)
-{
-	if (Len > 0 && Len < sizeof(usb_rx_buffer))
-	{
+static void Display_All_Parameters(void) {
+	//	baca_nilai_pada_flash();
+	char buffer[512];
+	int len =
+			snprintf(buffer, sizeof(buffer),
+					"firm_version = %s\n$1 = %lu g_blinking_led_off_time_ms\n$2 = %lu g_blinking_led_on_time_ms\n$3 = %u g_input_inversion_mask\n$4 = %u g_ssv_variation_rpm\n$5 = %lu g_ssv_cycle_ms\n$6 = %u g_min_spindle_rpm\n$7 = %u g_max_spindle_rpm\n",
+					FIRMWARE_VERSION, g_blinking_led_off_time_ms, // 1
+					g_blinking_led_on_time_ms,  // 2
+					g_input_inversion_mask,	   // 3
+					g_ssv_variation_rpm,		   // 4
+					g_ssv_cycle_ms,			   // 5
+					g_min_spindle_rpm,		   // 6
+					g_max_spindle_rpm		   // 7
+					);
+	CDC_Transmit_FS((uint8_t*) buffer, len);
+	// tampilkan_data_flash = 0;
+}
+
+static void Display_Pinout_Info(void) {
+	char buffer[512];
+	int len =
+			snprintf(buffer, sizeof(buffer),
+					"%s : %s%d\r\n%s : %s%d\r\n%s : %s%d\r\n%s : %s%d\r\n%s : %s%d\r\n%s : %s%d\r\n%s : %s%d\r\n%s : %s%d\r\n%s : %s%d\r\n",
+					input_pin_names[0], input_port_letters[0],
+					input_port_number[0], input_pin_names[1],
+					input_port_letters[1], input_port_number[1],
+					input_pin_names[2], input_port_letters[2],
+					input_port_number[2], input_pin_names[3],
+					input_port_letters[3], input_port_number[3],
+					input_pin_names[4], input_port_letters[4],
+					input_port_number[4], input_pin_names[5],
+					input_port_letters[5], input_port_number[5],
+					input_pin_names[6], input_port_letters[6],
+					input_port_number[6], input_pin_names[7],
+					input_port_letters[7], input_port_number[7],
+					input_pin_names[8], input_port_letters[8],
+					input_port_number[8]);
+	CDC_Transmit_FS((uint8_t*) buffer, len);
+}
+
+void USB_CDC_RxHandler(uint8_t *Buf, uint32_t Len) {
+	if (Len > 0 && Len < sizeof(usb_rx_buffer)) {
 		memcpy(usb_rx_buffer, Buf, Len);
 		usb_rx_buffer[Len] = '\0';
 
-		if (Len == 1 && usb_rx_buffer[0] >= 'A' && usb_rx_buffer[0] <= 'Z')
-		{
+		if (Len == 1 && usb_rx_buffer[0] >= 'A' && usb_rx_buffer[0] <= 'Z') {
 			OutputCommand_t cmd_msg;
 			cmd_msg.command = usb_rx_buffer[0];
-			if (osMessageQueuePut(OutputCmdQueueHandle, &cmd_msg, 0U, 0U) != osOK)
-			{
+			if (osMessageQueuePut(OutputCmdQueueHandle, &cmd_msg, 0U, 0U)
+					!= osOK) {
 				printf("Error: Gagal mengirim perintah output ke queue.\r\n");
 			}
-		}
-		else if (strncmp(usb_rx_buffer, "$1=", 3) == 0) // Waktu OFF LED Berkedip (detik)
-		{
+		} else if (strncmp(usb_rx_buffer, "$$", 2) == 0 && Len == 2) // Perintah $$
+				{
+			Display_All_Parameters();
+		} else if (strncmp(usb_rx_buffer, "$P", 2) == 0 && Len == 2) // Perintah $P
+				{
+			Display_Pinout_Info();
+		} else if (strncmp(usb_rx_buffer, "$1=", 3) == 0) // Waktu OFF LED Berkedip (detik)
+				{
 			char *value_str = usb_rx_buffer + 3;
 			long val_seconds = atol(value_str);
-			if (val_seconds > 0 && val_seconds <= 3600)
-			{
-				uint32_t new_off_time_ms = (uint32_t)val_seconds * 1000;
-				if (new_off_time_ms != g_blinking_led_off_time_ms)
-				{
+			if (val_seconds > 0 && val_seconds <= 3600) {
+				uint32_t new_off_time_ms = (uint32_t) val_seconds * 1000;
+				if (new_off_time_ms != g_blinking_led_off_time_ms) {
 					g_blinking_led_off_time_ms = new_off_time_ms;
 					Save_Blinker_Config_To_Flash();
-				}
-				else
-				{
+				} else {
 					printf("Info: Waktu OFF LED tidak berubah ($1=%ld).\r\n",
-						   val_seconds);
+							val_seconds);
 				}
-			}
-			else
-			{
+			} else {
 				printf(
-					"Error: Nilai $1 tidak valid (%s). Harus 1-3600 detik.\r\n",
-					value_str);
+						"Error: Nilai $1 tidak valid (%s). Harus 1-3600 detik.\r\n",
+						value_str);
 			}
-		}
-		else if (strncmp(usb_rx_buffer, "$2=", 3) == 0) // Waktu ON LED Berkedip (detik)
-		{
+		} else if (strncmp(usb_rx_buffer, "$2=", 3) == 0) // Waktu ON LED Berkedip (detik)
+				{
 			char *value_str = usb_rx_buffer + 3;
 			long val_seconds = atol(value_str);
-			if (val_seconds > 0 && val_seconds <= 3600)
-			{
-				uint32_t new_on_time_ms = (uint32_t)val_seconds * 1000;
-				if (new_on_time_ms != g_blinking_led_on_time_ms)
-				{
+			if (val_seconds > 0 && val_seconds <= 3600) {
+				uint32_t new_on_time_ms = (uint32_t) val_seconds * 1000;
+				if (new_on_time_ms != g_blinking_led_on_time_ms) {
 					g_blinking_led_on_time_ms = new_on_time_ms;
 					Save_Blinker_Config_To_Flash();
-				}
-				else
-				{
+				} else {
 					printf("Info: Waktu ON LED tidak berubah ($2=%ld).\r\n",
-						   val_seconds);
+							val_seconds);
 				}
-			}
-			else
-			{
+			} else {
 				printf(
-					"Error: Nilai $2 tidak valid (%s). Harus 1-3600 detik.\r\n",
-					value_str);
+						"Error: Nilai $2 tidak valid (%s). Harus 1-3600 detik.\r\n",
+						value_str);
 			}
-		}
-		else if (strncmp(usb_rx_buffer, "$3=", 3) == 0) // Input Inversion Mask
-		{
+		} else if (strncmp(usb_rx_buffer, "$3=", 3) == 0) // Input Inversion Mask
+				{
 			char *value_str = usb_rx_buffer + 3;
 			long val_mask = atol(value_str); // Bisa juga strtol dengan basis 10 atau 16
-			if (val_mask >= 0 && val_mask <= 255)
-			{ // 8 bit mask
-				uint8_t new_mask = (uint8_t)val_mask;
-				if (new_mask != g_input_inversion_mask)
-				{
+			if (val_mask >= 0 && val_mask <= 255) { // 8 bit mask
+				uint8_t new_mask = (uint8_t) val_mask;
+				if (new_mask != g_input_inversion_mask) {
 					Save_Input_Inversion_Mask_To_Flash(new_mask);
-				}
-				else
-				{
+				} else {
 					printf(
-						"Info: Input Inversion Mask tidak berubah ($3=%ld).\r\n",
-						val_mask);
+							"Info: Input Inversion Mask tidak berubah ($3=%ld).\r\n",
+							val_mask);
 				}
-			}
-			else
-			{
+			} else {
 				printf("Error: Nilai $3 tidak valid (%s). Harus 0-255.\r\n",
-					   value_str);
+						value_str);
 			}
-		}
-		else if (strncmp(usb_rx_buffer, "$4=", 3) == 0) // SSV Variation RPM
-		{
+		} else if (strncmp(usb_rx_buffer, "$4=", 3) == 0) // SSV Variation RPM
+				{
 			char *value_str = usb_rx_buffer + 3;
 			long val_rpm = atol(value_str);
-			if (val_rpm >= 0 && val_rpm <= 5000)
-			{ // Batasi variasi RPM
-				uint16_t new_var_rpm = (uint16_t)val_rpm;
-				if (new_var_rpm != g_ssv_variation_rpm)
-				{
+			if (val_rpm >= 0 && val_rpm <= 5000) { // Batasi variasi RPM
+				uint16_t new_var_rpm = (uint16_t) val_rpm;
+				if (new_var_rpm != g_ssv_variation_rpm) {
 					g_ssv_variation_rpm = new_var_rpm;
 					Save_SSV_Config_To_Flash();
 				}
-			}
-			else
-			{
+			} else {
 				printf("Error: Nilai $4 (SSV Var) tidak valid (0-5000).\r\n");
 			}
-		}
-		else if (strncmp(usb_rx_buffer, "$5=", 3) == 0) // SSV Cycle (ms)
-		{
+		} else if (strncmp(usb_rx_buffer, "$5=", 3) == 0) // SSV Cycle (ms)
+				{
 			char *value_str = usb_rx_buffer + 3;
 			long val_ms = atol(value_str);
 			// Cycle 0 berarti SSV nonaktif, atau minimal 100ms
-			if (val_ms == 0 || (val_ms >= 100 && val_ms <= 60000))
-			{
-				uint32_t new_cycle_ms = (uint32_t)val_ms;
-				if (new_cycle_ms != g_ssv_cycle_ms)
-				{
+			if (val_ms == 0 || (val_ms >= 100 && val_ms <= 60000)) {
+				uint32_t new_cycle_ms = (uint32_t) val_ms;
+				if (new_cycle_ms != g_ssv_cycle_ms) {
 					g_ssv_cycle_ms = new_cycle_ms;
 					Save_SSV_Config_To_Flash();
 				}
-			}
-			else
-			{
+			} else {
 				printf(
-					"Error: Nilai $5 (SSV Cycle) tidak valid (0 atau 100-60000 ms).\r\n");
+						"Error: Nilai $5 (SSV Cycle) tidak valid (0 atau 100-60000 ms).\r\n");
 			}
-		}
-		else if (strncmp(usb_rx_buffer, "$6=", 3) == 0) // Min Spindle RPM
-		{
+		} else if (strncmp(usb_rx_buffer, "$6=", 3) == 0) // Min Spindle RPM
+				{
 			char *value_str = usb_rx_buffer + 3;
 			long val_rpm = atol(value_str);
-			if (val_rpm >= 0 && val_rpm < g_max_spindle_rpm && val_rpm <= 30000)
-			{ // Min RPM tidak boleh > Max RPM
-				uint16_t new_min_rpm = (uint16_t)val_rpm;
-				if (new_min_rpm != g_min_spindle_rpm)
-				{
+			if (val_rpm >= 0 && val_rpm < g_max_spindle_rpm
+					&& val_rpm <= 30000) { // Min RPM tidak boleh > Max RPM
+				uint16_t new_min_rpm = (uint16_t) val_rpm;
+				if (new_min_rpm != g_min_spindle_rpm) {
 					g_min_spindle_rpm = new_min_rpm;
 					Save_RPM_Range_Config_To_Flash();
 				}
-			}
-			else
-			{
+			} else {
 				printf(
-					"Error: Nilai $6 (Min RPM) tidak valid atau > Max RPM.\r\n");
+						"Error: Nilai $6 (Min RPM) tidak valid atau > Max RPM.\r\n");
 			}
-		}
-		else if (strncmp(usb_rx_buffer, "$7=", 3) == 0) // Max Spindle RPM
-		{
+		} else if (strncmp(usb_rx_buffer, "$7=", 3) == 0) // Max Spindle RPM
+				{
 			char *value_str = usb_rx_buffer + 3;
 			long val_rpm = atol(value_str);
-			if (val_rpm > g_min_spindle_rpm && val_rpm <= 30000)
-			{ // Max RPM harus > Min RPM
-				uint16_t new_max_rpm = (uint16_t)val_rpm;
-				if (new_max_rpm != g_max_spindle_rpm)
-				{
+			if (val_rpm > g_min_spindle_rpm && val_rpm <= 30000) { // Max RPM harus > Min RPM
+				uint16_t new_max_rpm = (uint16_t) val_rpm;
+				if (new_max_rpm != g_max_spindle_rpm) {
 					g_max_spindle_rpm = new_max_rpm;
 					Save_RPM_Range_Config_To_Flash();
 				}
-			}
-			else
-			{
+			} else {
 				printf(
-					"Error: Nilai $7 (Max RPM) tidak valid atau < Min RPM.\r\n");
+						"Error: Nilai $7 (Max RPM) tidak valid atau < Min RPM.\r\n");
 			}
-		}
-		else
-		{
+		} else {
 			printf("Perintah serial tidak dikenal: %s\r\n", usb_rx_buffer);
 		}
 	}
 }
 
 // --- Implementasi Fungsi Modbus ---
-static uint16_t calculate_crc16(const uint8_t *data, uint16_t length)
-{
+static uint16_t calculate_crc16(const uint8_t *data, uint16_t length) {
 	uint16_t crc = 0xFFFF;
-	for (uint16_t i = 0; i < length; i++)
-	{
+	for (uint16_t i = 0; i < length; i++) {
 		crc ^= data[i];
-		for (uint8_t j = 0; j < 8; j++)
-		{
-			if (crc & 0x0001)
-			{
+		for (uint8_t j = 0; j < 8; j++) {
+			if (crc & 0x0001) {
 				crc = (crc >> 1) ^ 0xA001;
-			}
-			else
-			{
+			} else {
 				crc = crc >> 1;
 			}
 		}
@@ -1251,36 +1203,32 @@ static uint16_t calculate_crc16(const uint8_t *data, uint16_t length)
 	return crc;
 }
 
-static void print_tx_data_hex(uint8_t *data, uint32_t panjang_data)
-{
+static void print_tx_data_hex(uint8_t *data, uint32_t panjang_data) {
 	if (!MODBUS_VERBOSE)
 		return;
 	printf("Modbus TX: ");
-	for (uint32_t i = 0; i < panjang_data; i++)
-	{
+	for (uint32_t i = 0; i < panjang_data; i++) {
 		printf("%02X ", data[i]);
 	}
 	printf("\r\n");
 }
 
-static void sendDataOverModbus(uint8_t *data, uint8_t ukuran)
-{
+static void sendDataOverModbus(uint8_t *data, uint8_t ukuran) {
 	HAL_GPIO_WritePin(MODBUS_SEL_GPIO_Port, MODBUS_SEL_Pin, GPIO_PIN_SET); // Enable Transmit
-	osDelay(1);															   // Sedikit delay untuk memastikan DE aktif sebelum data dikirim
-	HAL_UART_Transmit(&MODBUS_UART_HANDLE, data, ukuran, 100);			   // Timeout 100ms
+	osDelay(1);	// Sedikit delay untuk memastikan DE aktif sebelum data dikirim
+	HAL_UART_Transmit(&MODBUS_UART_HANDLE, data, ukuran, 100);	// Timeout 100ms
 	// Tunggu sampai transmisi selesai (penting untuk RS485)
 	// Cara paling sederhana adalah dengan delay yang cukup, atau cek flag UART TX Complete
 	// Untuk HAL_UART_Transmit blocking, delay setelahnya mungkin cukup.
-	osDelay(5);																 // Beri waktu untuk byte terakhir terkirim sepenuhnya
+	osDelay(5);			// Beri waktu untuk byte terakhir terkirim sepenuhnya
 	HAL_GPIO_WritePin(MODBUS_SEL_GPIO_Port, MODBUS_SEL_Pin, GPIO_PIN_RESET); // Disable Transmit (Enable Receive)
 }
 
-static void Spindle_Modbus_CW_CCW(uint8_t arah, uint8_t verbose)
-{
+static void Spindle_Modbus_CW_CCW(uint8_t arah, uint8_t verbose) {
 	uint8_t TxData[5];
 	TxData[0] = MODBUS_SLAVE_ID;
 	TxData[1] = 0x44; // Fungsi untuk kontrol arah/stop
-	TxData[2] = (arah == 1) ? 0x01 /* CW */ : 0x02 /* CCW */;
+	TxData[2] = (arah == 1) ? 0x01 /* CW */: 0x02 /* CCW */;
 	uint16_t crc = calculate_crc16(TxData, 3);
 	TxData[3] = crc & 0xFF;
 	TxData[4] = (crc >> 8) & 0xFF;
@@ -1290,8 +1238,7 @@ static void Spindle_Modbus_CW_CCW(uint8_t arah, uint8_t verbose)
 	osDelay(20); // Delay antar perintah Modbus
 }
 
-static void Spindle_Modbus_Stop_Hold(uint8_t verbose)
-{
+static void Spindle_Modbus_Stop_Hold(uint8_t verbose) {
 	uint8_t TxData[5];
 	TxData[0] = MODBUS_SLAVE_ID;
 	TxData[1] = 0x44;
@@ -1305,8 +1252,7 @@ static void Spindle_Modbus_Stop_Hold(uint8_t verbose)
 	osDelay(20);
 }
 
-static void Spindle_Modbus_Stop_Disable(uint8_t verbose)
-{					   // Menggantikan SON_Motor_Off
+static void Spindle_Modbus_Stop_Disable(uint8_t verbose) {// Menggantikan SON_Motor_Off
 	uint8_t TxData[5]; // Disesuaikan dengan fungsi 0x44 jika ini adalah "disable"
 	TxData[0] = MODBUS_SLAVE_ID;
 	TxData[1] = 0x44; // Fungsi untuk kontrol arah/stop
@@ -1320,13 +1266,12 @@ static void Spindle_Modbus_Stop_Disable(uint8_t verbose)
 	osDelay(20);
 }
 
-static void Spindle_Modbus_Set_Rpm(uint32_t rpm, uint8_t verbose)
-{
+static void Spindle_Modbus_Set_Rpm(uint32_t rpm, uint8_t verbose) {
 	uint8_t TxData[8]; // Ukuran buffer untuk Set RPM
 	TxData[0] = MODBUS_SLAVE_ID;
 	TxData[1] = 0x06;			   // Write Single Register
-	TxData[2] = 0x00;			   // Alamat Register RPM (High Byte) - SESUAIKAN DENGAN MANUAL SPINDLE
-	TxData[3] = 0x4C;			   // Alamat Register RPM (Low Byte) - SESUAIKAN (misal, P-076)
+	TxData[2] = 0x00;// Alamat Register RPM (High Byte) - SESUAIKAN DENGAN MANUAL SPINDLE
+	TxData[3] = 0x4C;// Alamat Register RPM (Low Byte) - SESUAIKAN (misal, P-076)
 	TxData[4] = (rpm >> 8) & 0xFF; // Nilai RPM (High Byte)
 	TxData[5] = rpm & 0xFF;		   // Nilai RPM (Low Byte)
 	uint16_t crc = calculate_crc16(TxData, 6);
@@ -1339,8 +1284,7 @@ static void Spindle_Modbus_Set_Rpm(uint32_t rpm, uint8_t verbose)
 }
 
 // Placeholder untuk fungsi pembacaan PWM
-static uint32_t Get_Spindle_RPM_From_PWM(void)
-{
+static uint32_t Get_Spindle_RPM_From_PWM(void) {
 	float duty = g_pwm_duty_cycle; // 0.0f - 100.0f
 
 	// Pastikan duty cycle berada dalam rentang 0-100
@@ -1350,35 +1294,31 @@ static uint32_t Get_Spindle_RPM_From_PWM(void)
 		duty = 100.0f;
 
 	// Linear scaling dari duty cycle (0-100%) ke RPM (min_rpm - max_rpm)
-	if (g_max_spindle_rpm <= g_min_spindle_rpm)
-	{
+	if (g_max_spindle_rpm <= g_min_spindle_rpm) {
 		return g_min_spindle_rpm; // Hindari pembagian dengan nol atau rentang negatif
 	}
 
 	uint32_t rpm_range = g_max_spindle_rpm - g_min_spindle_rpm;
-	uint32_t calculated_rpm = g_min_spindle_rpm + (uint32_t)((duty / 100.0f) * rpm_range);
+	uint32_t calculated_rpm = g_min_spindle_rpm
+			+ (uint32_t) ((duty / 100.0f) * rpm_range);
 
 	return calculated_rpm;
 }
 
-void HAL_TIM_IC_CaptureCallback(TIM_HandleTypeDef *htim)
-{
-	if (htim->Instance == TIM2)
-	{
+void HAL_TIM_IC_CaptureCallback(TIM_HandleTypeDef *htim) {
+	if (htim->Instance == TIM2) {
 		if (htim->Channel == HAL_TIM_ACTIVE_CHANNEL_1) // Interrupt dari Channel 1 (Period)
-		{
+				{
 			g_pwm_cycle_time_raw = HAL_TIM_ReadCapturedValue(htim,
-															 TIM_CHANNEL_1);
+			TIM_CHANNEL_1);
 			g_pwm_pulse_width_raw = HAL_TIM_ReadCapturedValue(htim,
-															  TIM_CHANNEL_2); // Baca pulse width
+			TIM_CHANNEL_2); // Baca pulse width
 
-			if (g_pwm_cycle_time_raw != 0)
-			{
-				g_pwm_duty_cycle = (g_pwm_pulse_width_raw * 100.0f) / g_pwm_cycle_time_raw;
+			if (g_pwm_cycle_time_raw != 0) {
+				g_pwm_duty_cycle = (g_pwm_pulse_width_raw * 100.0f)
+						/ g_pwm_cycle_time_raw;
 				g_pwm_frequency = F_CLK_TIM2 / g_pwm_cycle_time_raw; // F_CLK_TIM2 harus benar
-			}
-			else
-			{
+			} else {
 				g_pwm_duty_cycle = 0.0f;
 				g_pwm_frequency = 0;
 			}
@@ -1398,8 +1338,7 @@ void HAL_TIM_IC_CaptureCallback(TIM_HandleTypeDef *htim)
  * @retval None
  */
 /* USER CODE END Header_StartInputScanTask */
-void StartInputScanTask(void *argument)
-{
+void StartInputScanTask(void *argument) {
 	/* init code for USB_DEVICE */
 	MX_USB_DEVICE_Init();
 	/* USER CODE BEGIN 5 */
@@ -1407,63 +1346,55 @@ void StartInputScanTask(void *argument)
 	uint8_t last_linked_input_active_state = 0xFF; // Inisialisasi ke nilai yang tidak mungkin
 	printf("InputScanTask dimulai.\r\n");
 	/* Infinite loop */
-	for (;;)
-	{
+	for (;;) {
 		int char_idx = 0;
 		uint8_t current_linked_input_active_state = 0;
 
-		for (int i = 0; i < NUM_INPUTS; i++)
-		{
-			if (input_ports[i] != NULL)
-			{
+		for (int i = 0; i < NUM_INPUTS; i++) {
+			if (input_ports[i] != NULL) {
 				GPIO_PinState pin_raw_state = HAL_GPIO_ReadPin(input_ports[i],
-															   input_pins[i]);
+						input_pins[i]);
 				uint8_t is_inverted = (g_input_inversion_mask >> i) & 0x01;
 				uint8_t input_active = 0;
 
-				if (is_inverted)
-				{ // Logika terbalik: aktif jika HIGH (misal, sensor NPN atau tombol ke VCC)
+				if (is_inverted) { // Logika terbalik: aktif jika HIGH (misal, sensor NPN atau tombol ke VCC)
 					input_active = (pin_raw_state == GPIO_PIN_SET);
-				}
-				else
-				{ // Logika normal: aktif jika LOW (misal, tombol ke GND dengan pull-up)
+				} else { // Logika normal: aktif jika LOW (misal, tombol ke GND dengan pull-up)
 					input_active = (pin_raw_state == GPIO_PIN_RESET);
 				}
 
-				if (input_active)
-				{
+				if (input_active) {
 					status_string[char_idx++] = 'A' + i;
 				}
 
 				// Logika untuk input ke-8 (indeks 7) mengontrol output SR ke-13 (indeks 12)
-				if (i == LINKED_INPUT_INDEX)
-				{
+				if (i == LINKED_INPUT_INDEX) {
 					current_linked_input_active_state = input_active;
 				}
 			}
 		}
 
 		// Update output SR yang terhubung jika state input terkait berubah
-		if (current_linked_input_active_state != last_linked_input_active_state)
-		{
-			if (current_linked_input_active_state)
-			{
+		if (current_linked_input_active_state
+				!= last_linked_input_active_state) {
+			if (current_linked_input_active_state) {
 				current_sr_output_state |= (1 << LINKED_SR_OUTPUT_INDEX);
+#if DEBUG_MODE == 1
 				printf("Info: Input %d AKTIF, Output SR %d ON.\r\n",
 					   LINKED_INPUT_INDEX, LINKED_SR_OUTPUT_INDEX);
-			}
-			else
-			{
+#endif
+			} else {
+#if DEBUG_MODE == 1
 				current_sr_output_state &= ~(1 << LINKED_SR_OUTPUT_INDEX);
 				printf("Info: Input %d TIDAK AKTIF, Output SR %d OFF.\r\n",
 					   LINKED_INPUT_INDEX, LINKED_SR_OUTPUT_INDEX);
+#endif
 			}
 			SR_UpdateOutputs();
 			last_linked_input_active_state = current_linked_input_active_state;
 		}
 
-		if (char_idx > 0)
-		{
+		if (char_idx > 0) {
 			status_string[char_idx++] = '\r';
 			status_string[char_idx++] = '\n';
 			status_string[char_idx] = '\0';
@@ -1481,63 +1412,48 @@ void StartInputScanTask(void *argument)
  * @retval None
  */
 /* USER CODE END Header_StartOutputControlTask */
-void StartOutputControlTask(void *argument)
-{
+void StartOutputControlTask(void *argument) {
 	/* USER CODE BEGIN StartOutputControlTask */
 	OutputCommand_t received_cmd;
 	osStatus_t status;
 	printf("OutputControlTask dimulai.\r\n");
 	/* Infinite loop */
-	for (;;)
-	{
+	for (;;) {
 		status = osMessageQueueGet(OutputCmdQueueHandle, &received_cmd, NULL,
-								   osWaitForever);
+		osWaitForever);
 
-		if (status == osOK)
-		{
+		if (status == osOK) {
 			int output_index = -1;
 			uint8_t set_on = 0; // 0 untuk OFF, 1 untuk ON
 
-			if (received_cmd.command >= 'A' && received_cmd.command <= 'Z')
-			{
+			if (received_cmd.command >= 'A' && received_cmd.command <= 'Z') {
 				int command_val = received_cmd.command - 'A'; // 0 untuk A, 1 untuk B, ..., 25 untuk Z
 				output_index = command_val / 2;
 
-				if (command_val % 2 == 0)
-				{ // Perintah genap (A, C, E, ...) -> ON
+				if (command_val % 2 == 0) { // Perintah genap (A, C, E, ...) -> ON
 					set_on = 1;
-				}
-				else
-				{ // Perintah ganjil (B, D, F, ...) -> OFF
+				} else { // Perintah ganjil (B, D, F, ...) -> OFF
 					set_on = 0;
 				}
 
-				if (output_index >= 0 && output_index < NUM_SR_OUTPUTS)
-				{
-					if (set_on)
-					{
+				if (output_index >= 0 && output_index < NUM_SR_OUTPUTS) {
+					if (set_on) {
 						current_sr_output_state |= (1 << output_index); // Set bit
-					}
-					else
-					{
+					} else {
 						current_sr_output_state &= ~(1 << output_index); // Clear bit
 					}
 					SR_UpdateOutputs(); // Kirim state baru ke shift registers
 					printf("Output SR %d %s (State: 0x%04X)\r\n", output_index,
-						   set_on ? "ON" : "OFF", current_sr_output_state);
-				}
-				else
-				{
+							set_on ? "ON" : "OFF", current_sr_output_state);
+				} else {
 					printf(
-						"Error: Indeks Output SR tidak valid (%d) untuk perintah %c.\r\n",
-						output_index, received_cmd.command);
+							"Error: Indeks Output SR tidak valid (%d) untuk perintah %c.\r\n",
+							output_index, received_cmd.command);
 				}
-			}
-			else
-			{
+			} else {
 				printf(
-					"Error: Perintah output SR tidak dikenal di task: %c\r\n",
-					received_cmd.command);
+						"Error: Perintah output SR tidak dikenal di task: %c\r\n",
+						received_cmd.command);
 			}
 		}
 	}
@@ -1551,14 +1467,12 @@ void StartOutputControlTask(void *argument)
  * @retval None
  */
 /* USER CODE END Header_StartTimerOliTask */
-void StartTimerOliTask(void *argument)
-{
+void StartTimerOliTask(void *argument) {
 	/* USER CODE BEGIN StartTimerOliTask */
 	printf("BlinkingLedTask dimulai untuk Output SR %d.\r\n",
-		   BLINKING_LED_SR_OUTPUT_INDEX);
+	BLINKING_LED_SR_OUTPUT_INDEX);
 	/* Infinite loop */
-	for (;;)
-	{
+	for (;;) {
 		current_sr_output_state |= (1 << BLINKING_LED_SR_OUTPUT_INDEX);
 		SR_UpdateOutputs();
 		osDelay(g_blinking_led_on_time_ms > 0 ? g_blinking_led_on_time_ms : 1); // Min delay 1ms
@@ -1566,7 +1480,8 @@ void StartTimerOliTask(void *argument)
 		current_sr_output_state &= ~(1 << BLINKING_LED_SR_OUTPUT_INDEX);
 		SR_UpdateOutputs();
 		osDelay(
-			g_blinking_led_off_time_ms > 0 ? g_blinking_led_off_time_ms : 1); // Min delay 1ms
+				g_blinking_led_off_time_ms > 0 ?
+						g_blinking_led_off_time_ms : 1); // Min delay 1ms
 	}
 	/* USER CODE END StartTimerOliTask */
 }
@@ -1578,8 +1493,7 @@ void StartTimerOliTask(void *argument)
  * @retval None
  */
 /* USER CODE END Header_StartModbusSpindleTask */
-void StartModbusSpindleTask(void *argument)
-{
+void StartModbusSpindleTask(void *argument) {
 	/* USER CODE BEGIN StartModbusSpindleTask */
 	printf("ModbusSpindleControlTask dimulai.\r\n");
 	uint32_t base_target_rpm = 0;
@@ -1591,21 +1505,15 @@ void StartModbusSpindleTask(void *argument)
 	Spindle_Modbus_Stop_Disable(MODBUS_VERBOSE);
 	osDelay(100);
 	/* Infinite loop */
-	for (;;)
-	{
+	for (;;) {
 		uint8_t cw_active = g_input_cw_debounced_state;
 		uint8_t ccw_active = g_input_ccw_debounced_state;
 
-		if (cw_active && !ccw_active)
-		{
+		if (cw_active && !ccw_active) {
 			current_direction = 1;
-		}
-		else if (!cw_active && ccw_active)
-		{
+		} else if (!cw_active && ccw_active) {
 			current_direction = 2;
-		}
-		else
-		{
+		} else {
 			current_direction = 0;
 		}
 
@@ -1613,54 +1521,46 @@ void StartModbusSpindleTask(void *argument)
 		actual_rpm_to_send = base_target_rpm; // Default ke RPM dasar
 
 		// Logika SSV
-		if (current_direction != 0 && g_ssv_variation_rpm > 0 && g_ssv_cycle_ms > 0)
-		{
+		if (current_direction != 0 && g_ssv_variation_rpm > 0
+				&& g_ssv_cycle_ms > 0) {
 			uint32_t current_time_ms = osKernelGetTickCount();
-			if (ssv_cycle_start_time_ms == 0)
-			{ // Inisialisasi start time untuk siklus SSV
+			if (ssv_cycle_start_time_ms == 0) { // Inisialisasi start time untuk siklus SSV
 				ssv_cycle_start_time_ms = current_time_ms;
 			}
 
-			uint32_t time_in_full_cycle_ms = (current_time_ms - ssv_cycle_start_time_ms) % g_ssv_cycle_ms;
+			uint32_t time_in_full_cycle_ms = (current_time_ms
+					- ssv_cycle_start_time_ms) % g_ssv_cycle_ms;
 			float progress_ratio;
 			int32_t ssv_offset;
 
 			uint32_t half_cycle_ms = g_ssv_cycle_ms / 2;
 
-			if (time_in_full_cycle_ms < half_cycle_ms)
-			{ // Fase naik (Base - Var -> Base + Var)
-				progress_ratio = (float)time_in_full_cycle_ms / half_cycle_ms;
-				ssv_offset = (int32_t)(-g_ssv_variation_rpm + progress_ratio * (2.0f * g_ssv_variation_rpm));
-			}
-			else
-			{ // Fase turun (Base + Var -> Base - Var)
-				uint32_t time_in_second_half = time_in_full_cycle_ms - half_cycle_ms;
-				progress_ratio = (float)time_in_second_half / half_cycle_ms;
-				ssv_offset = (int32_t)(g_ssv_variation_rpm - progress_ratio * (2.0f * g_ssv_variation_rpm));
+			if (time_in_full_cycle_ms < half_cycle_ms) { // Fase naik (Base - Var -> Base + Var)
+				progress_ratio = (float) time_in_full_cycle_ms / half_cycle_ms;
+				ssv_offset = (int32_t) (-g_ssv_variation_rpm
+						+ progress_ratio * (2.0f * g_ssv_variation_rpm));
+			} else { // Fase turun (Base + Var -> Base - Var)
+				uint32_t time_in_second_half = time_in_full_cycle_ms
+						- half_cycle_ms;
+				progress_ratio = (float) time_in_second_half / half_cycle_ms;
+				ssv_offset = (int32_t) (g_ssv_variation_rpm
+						- progress_ratio * (2.0f * g_ssv_variation_rpm));
 			}
 
 			actual_rpm_to_send = base_target_rpm + ssv_offset;
-			if ((int32_t)actual_rpm_to_send < 0)
+			if ((int32_t) actual_rpm_to_send < 0)
 				actual_rpm_to_send = 0; // Pastikan RPM tidak negatif
-		}
-		else
-		{
+		} else {
 			ssv_cycle_start_time_ms = 0; // Reset SSV start time jika spindle berhenti atau SSV dinonaktifkan
 		}
 
 		// Kirim perintah arah jika berubah
-		if (current_direction != last_direction)
-		{
-			if (current_direction == 1)
-			{
+		if (current_direction != last_direction) {
+			if (current_direction == 1) {
 				Spindle_Modbus_CW_CCW(1, MODBUS_VERBOSE);
-			}
-			else if (current_direction == 2)
-			{
+			} else if (current_direction == 2) {
 				Spindle_Modbus_CW_CCW(0, MODBUS_VERBOSE);
-			}
-			else
-			{
+			} else {
 				Spindle_Modbus_Stop_Hold(MODBUS_VERBOSE);
 			}
 			last_direction = current_direction;
@@ -1671,18 +1571,13 @@ void StartModbusSpindleTask(void *argument)
 		}
 
 		// Kirim RPM jika arah tidak STOP dan RPM aktual (termasuk SSV) berubah
-		if (current_direction != 0)
-		{
-			if (actual_rpm_to_send != last_sent_actual_rpm)
-			{
+		if (current_direction != 0) {
+			if (actual_rpm_to_send != last_sent_actual_rpm) {
 				Spindle_Modbus_Set_Rpm(actual_rpm_to_send, MODBUS_VERBOSE);
 				last_sent_actual_rpm = actual_rpm_to_send;
 			}
-		}
-		else
-		{ // current_direction == 0 (STOP)
-			if (last_sent_actual_rpm != 0 && last_direction != 0)
-			{
+		} else { // current_direction == 0 (STOP)
+			if (last_sent_actual_rpm != 0 && last_direction != 0) {
 				// Jika spindle baru saja dihentikan dan RPM terakhir bukan 0,
 				// Stop_Hold seharusnya sudah cukup. Set RPM ke 0 bisa redundan.
 				// Spindle_Modbus_Set_Rpm(0, MODBUS_VERBOSE);
@@ -1702,13 +1597,11 @@ void StartModbusSpindleTask(void *argument)
  * @param  htim : TIM handle
  * @retval None
  */
-void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim)
-{
+void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim) {
 	/* USER CODE BEGIN Callback 0 */
 
 	/* USER CODE END Callback 0 */
-	if (htim->Instance == TIM4)
-	{
+	if (htim->Instance == TIM4) {
 		HAL_IncTick();
 	}
 	/* USER CODE BEGIN Callback 1 */
@@ -1720,14 +1613,12 @@ void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim)
  * @brief  This function is executed in case of error occurrence.
  * @retval None
  */
-void Error_Handler(void)
-{
+void Error_Handler(void) {
 	/* USER CODE BEGIN Error_Handler_Debug */
 	/* User can add his own implementation to report the HAL error return state */
 	__disable_irq();
 	printf("!!! ERROR HANDLER DIPANGGIL !!!\r\n");
-	while (1)
-	{
+	while (1) {
 		HAL_GPIO_TogglePin(USER_LED_GPIO_Port, USER_LED_Pin);
 		for (volatile uint32_t i = 0; i < SystemCoreClock / 50 / 2; i++)
 			;
