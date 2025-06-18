@@ -216,20 +216,20 @@ static uint16_t g_min_spindle_rpm = DEFAULT_MIN_SPINDLE_RPM;
 static uint16_t g_max_spindle_rpm = DEFAULT_MAX_SPINDLE_RPM;
 
 // Variabel global untuk status input CW dan CCW (diupdate oleh EXTI callback)
-// Inisialisasi sesuai kondisi normal pin Anda (misal, tidak ditekan = false)
 volatile bool g_user_btn_debounced_state = false;
 volatile bool g_input_cw_debounced_state = false;
 volatile bool g_input_ccw_debounced_state = false;
-
-// Flag untuk menandakan event baru setelah debounce untuk setiap tombol
 volatile uint8_t g_user_btn_event_latch = 0;
 volatile uint8_t g_input_cw_event_latch = 0;
 volatile uint8_t g_input_ccw_event_latch = 0;
-
-// Variabel untuk logika debounce internal per tombol
 volatile uint32_t g_last_interrupt_time_user_btn = 0;
 volatile uint32_t g_last_interrupt_time_input_cw = 0;
 volatile uint32_t g_last_interrupt_time_input_ccw = 0;
+uint8_t current_direction = 0; // 0 = stop, 1 = CW, 2 = CCW
+
+// Variabel baru untuk melacak status output
+volatile char g_last_atc_command = '?'; // Inisialisasi ke 'tidak diketahui'
+volatile char g_last_led_command = '?'; // Inisialisasi ke 'tidak diketahui'
 
 // input pwm related variables
 volatile uint32_t g_pwm_frequency = 0;
@@ -397,20 +397,20 @@ int main(void)
 	/* add threads, ... */
 	if (InputScanTaskHandle == NULL)
 	{
-		printf("FATAL Error: Gagal membuat InputScanTask!\r\n");
+		DEBUG_PRINTF("FATAL Error: Gagal membuat InputScanTask!\r\n");
 		Error_Handler();
 	}
 
 	if (OutputCtrlTaskHandle == NULL)
 	{
-		printf("FATAL Error: Gagal membuat OutputControlTask!\r\n");
+		DEBUG_PRINTF("FATAL Error: Gagal membuat OutputControlTask!\r\n");
 		Error_Handler();
 	}
 
 	if (TimerOliTaskHandle == NULL)
 	{
 		// Ini yang paling mungkin terjadi jika heap habis
-		printf(
+		DEBUG_PRINTF(
 			"FATAL Error: Gagal membuat BlinkingLedTask! (Cek configTOTAL_HEAP_SIZE)\r\n");
 		Error_Handler();
 	}
@@ -631,10 +631,10 @@ static void MX_USART1_UART_Init(void)
 
 	/* USER CODE END USART1_Init 1 */
 	huart1.Instance = USART1;
-	huart1.Init.BaudRate = 115200;
-	huart1.Init.WordLength = UART_WORDLENGTH_8B;
+	huart1.Init.BaudRate = 38400;
+	huart1.Init.WordLength = UART_WORDLENGTH_9B;
 	huart1.Init.StopBits = UART_STOPBITS_1;
-	huart1.Init.Parity = UART_PARITY_NONE;
+	huart1.Init.Parity = UART_PARITY_EVEN;
 	huart1.Init.Mode = UART_MODE_TX_RX;
 	huart1.Init.HwFlowCtl = UART_HWCONTROL_NONE;
 	huart1.Init.OverSampling = UART_OVERSAMPLING_16;
@@ -774,7 +774,7 @@ void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin)
 			g_user_btn_debounced_state = (HAL_GPIO_ReadPin(USER_BTN_GPIO_Port, USER_BTN_Pin) == GPIO_PIN_SET); // both rising_falling
 			g_user_btn_event_latch = 1;																		   // Set flag event untuk Tombol 1
 			g_last_interrupt_time_user_btn = current_time;
-			// printf("Tombol 1 event!\r\n"); // Debug
+			// DEBUG_PRINTF("Tombol 1 event!\r\n"); // Debug
 		}
 #else
 		g_user_btn_debounced_state = (HAL_GPIO_ReadPin(USER_BTN_GPIO_Port,
@@ -856,7 +856,7 @@ static HAL_StatusTypeDef Flash_Write_All_Known_Configs(void)
 	status = HAL_FLASH_Unlock();
 	if (status != HAL_OK)
 	{
-		printf(
+		DEBUG_PRINTF(
 			"Error: Flash Unlock gagal saat menyimpan semua config! (%d)\r\n",
 			status);
 		return status;
@@ -899,7 +899,7 @@ static HAL_StatusTypeDef Flash_Write_All_Known_Configs(void)
 	}
 	else
 	{
-		printf(
+		DEBUG_PRINTF(
 			"Error: Gagal erase page untuk semua config (PageError: 0x%lX, Status: %d)!\r\n",
 			PageError, status);
 	}
@@ -910,8 +910,8 @@ flash_write_error:
 flash_write_end:
 	if (status != HAL_OK && PageError == 0xFFFFFFFF)
 	{
-		printf("Error saat menulis salah satu config ke Flash! (%d)\r\n",
-			   status);
+		DEBUG_PRINTF("Error saat menulis salah satu config ke Flash! (%d)\r\n",
+					 status);
 	}
 	HAL_FLASH_Lock();
 	return status;
@@ -1008,15 +1008,15 @@ static void Load_All_Configs_From_Flash(void)
 
 	if (write_defaults_to_flash)
 	{
-		printf(
+		DEBUG_PRINTF(
 			"Info: Satu atau lebih konfigurasi tidak valid/default, menulis ulang semua ke Flash...\r\n");
 		if (Flash_Write_All_Known_Configs() == HAL_OK)
 		{
-			printf("Info: Konfigurasi default berhasil ditulis ke Flash.\r\n");
+			DEBUG_PRINTF("Info: Konfigurasi default berhasil ditulis ke Flash.\r\n");
 		}
 		else
 		{
-			printf(
+			DEBUG_PRINTF(
 				"Error: Gagal menulis konfigurasi default ke Flash saat startup.\r\n");
 		}
 	}
@@ -1029,14 +1029,14 @@ static HAL_StatusTypeDef Save_Input_Inversion_Mask_To_Flash(uint8_t mask)
 	// Atau, jika FEE (Flash Emulated EEPROM) digunakan, itu akan lebih mudah.
 	// Untuk sekarang, kita akan menulis ulang semua config yang diketahui.
 	printf("Info: Menyimpan Input Inversion Mask (0x%02X) ke Flash...\r\n",
-		   g_input_inversion_mask);
+				 g_input_inversion_mask);
 	return Flash_Write_All_Known_Configs();
 }
 
 static HAL_StatusTypeDef Save_Blinker_Config_To_Flash(void)
 {
 	printf("Info: Menyimpan Blinker Config (ON:%lu, OFF:%lu) ke Flash...\r\n",
-		   g_blinking_led_on_time_ms, g_blinking_led_off_time_ms);
+				 g_blinking_led_on_time_ms, g_blinking_led_off_time_ms);
 	return Flash_Write_All_Known_Configs();
 }
 
@@ -1050,7 +1050,7 @@ static HAL_StatusTypeDef Save_SSV_Config_To_Flash(void)
 static HAL_StatusTypeDef Save_RPM_Range_Config_To_Flash(void)
 {
 	printf("Info: Menyimpan RPM Range (Min:%u, Max:%u) ke Flash...\r\n",
-		   g_min_spindle_rpm, g_max_spindle_rpm);
+				 g_min_spindle_rpm, g_max_spindle_rpm);
 	return Flash_Write_All_Known_Configs();
 }
 
@@ -1085,11 +1085,11 @@ static void SR_UpdateOutputs(void)
 	// Kirim data: byte untuk SR terjauh dulu, lalu byte untuk SR terdekat
 	if (HAL_SPI_Transmit(&hspi1, &bytes_to_send[0], 1, 100) != HAL_OK)
 	{ // Data untuk SR2
-		printf("SPI Transmit Error SR2\r\n");
+		DEBUG_PRINTF("SPI Transmit Error SR2\r\n");
 	}
 	if (HAL_SPI_Transmit(&hspi1, &bytes_to_send[1], 1, 100) != HAL_OK)
 	{ // Data untuk SR1
-		printf("SPI Transmit Error SR1\r\n");
+		DEBUG_PRINTF("SPI Transmit Error SR1\r\n");
 	}
 
 	HAL_GPIO_WritePin(HC595_LOAD_GPIO_Port, HC595_LOAD_Pin, GPIO_PIN_SET);	 // Latch HIGH (data masuk ke output)
@@ -1145,7 +1145,12 @@ void USB_CDC_RxHandler(uint8_t *Buf, uint32_t Len)
 		memcpy(usb_rx_buffer, Buf, Len);
 		usb_rx_buffer[Len] = '\0';
 
-		if (Len == 1 && usb_rx_buffer[0] >= 'A' && usb_rx_buffer[0] <= 'Z')
+		if (usb_rx_buffer[0] == 'E' && Len == 1)
+		{
+			Spindle_Modbus_Stop_Disable(MODBUS_VERBOSE);
+			printf("Spindle STOP\r\n");
+		}
+		else if (Len == 1 && usb_rx_buffer[0] >= 'A' && usb_rx_buffer[0] <= 'Z')
 		{
 			OutputCommand_t cmd_msg;
 			cmd_msg.command = usb_rx_buffer[0];
@@ -1312,6 +1317,32 @@ void USB_CDC_RxHandler(uint8_t *Buf, uint32_t Len)
 					"Error: Nilai $7 (Max RPM) tidak valid atau < Min RPM.\r\n");
 			}
 		}
+		// Perintah manual spindle via USB CDC
+		else if ((usb_rx_buffer[0] == 'M' || usb_rx_buffer[0] == 'N') && Len >= 2)
+		{
+			// Format: M200 atau N200
+			char dir = usb_rx_buffer[0];
+			int rpm = atoi(&usb_rx_buffer[1]);
+			if (rpm > 0 && rpm <= g_max_spindle_rpm)
+			{
+				if (dir == 'M')
+				{
+					Spindle_Modbus_CW_CCW(1, MODBUS_VERBOSE); // CW
+					Spindle_Modbus_Set_Rpm(rpm, MODBUS_VERBOSE);
+					printf("Spindle CW %d rpm\r\n", rpm);
+				}
+				else if (dir == 'N')
+				{
+					Spindle_Modbus_CW_CCW(0, MODBUS_VERBOSE); // CCW
+					Spindle_Modbus_Set_Rpm(rpm, MODBUS_VERBOSE);
+					printf("Spindle CCW %d rpm\r\n", rpm);
+				}
+			}
+			else
+			{
+				printf("Error: RPM tidak valid (1-5000)\r\n");
+			}
+		}
 		else
 		{
 			printf("Perintah serial tidak dikenal: %s\r\n", usb_rx_buffer);
@@ -1345,12 +1376,12 @@ static void print_tx_data_hex(uint8_t *data, uint32_t panjang_data)
 {
 	if (!MODBUS_VERBOSE)
 		return;
-	printf("Modbus TX: ");
+	DEBUG_PRINTF("Modbus TX: ");
 	for (uint32_t i = 0; i < panjang_data; i++)
 	{
-		printf("%02X ", data[i]);
+		DEBUG_PRINTF("%02X ", data[i]);
 	}
-	printf("\r\n");
+	DEBUG_PRINTF("\r\n");
 }
 
 static void sendDataOverModbus(uint8_t *data, uint8_t ukuran)
@@ -1491,17 +1522,31 @@ void HAL_TIM_IC_CaptureCallback(TIM_HandleTypeDef *htim)
 void StartInputScanTask(void *argument)
 {
 	/* init code for USB_DEVICE */
-	MX_USB_DEVICE_Init();
+	//  MX_USB_DEVICE_Init();
 	/* USER CODE BEGIN 5 */
-	char status_string[NUM_INPUTS + 3];
+	// Buffer untuk membangun string output yang akan dikirim
+	char final_output_buffer[128];
+	// Array untuk menyimpan snapshot dari status input yang aktif
+	uint8_t active_input_states[NUM_INPUTS] = {0};
+
 	uint8_t last_linked_input_active_state = 0xFF; // Inisialisasi ke nilai yang tidak mungkin
-	printf("InputScanTask dimulai.\r\n");
+
+	// dapatkan data dari queue
+	// OutputCommand_t received_cmd;
+	// osStatus_t status;
+
+	DEBUG_PRINTF("InputScanTask dimulai dengan format baru.\r\n");
+
 	/* Infinite loop */
 	for (;;)
 	{
-		int char_idx = 0;
-		uint8_t current_linked_input_active_state = 0;
+		// baca queeue untuk mendapatkan perintah dari USB CDC
+		// status = osMessageQueueGet(OutputCmdQueueHandle, &received_cmd, NULL, osWaitForever);
 
+		// ======================================================================
+		// Langkah 1: Baca dan simpan status semua 9 input terlebih dahulu
+		// ======================================================================
+		uint8_t current_linked_input_active_state = 0;
 		for (int i = 0; i < NUM_INPUTS; i++)
 		{
 			if (input_ports[i] != NULL)
@@ -1512,58 +1557,113 @@ void StartInputScanTask(void *argument)
 				uint8_t input_active = 0;
 
 				if (is_inverted)
-				{ // Logika terbalik: aktif jika HIGH (misal, sensor NPN atau tombol ke VCC)
+				{ // Logika terbalik: aktif jika HIGH
 					input_active = (pin_raw_state == GPIO_PIN_SET);
 				}
 				else
-				{ // Logika normal: aktif jika LOW (misal, tombol ke GND dengan pull-up)
+				{ // Logika normal: aktif jika LOW (default)
 					input_active = (pin_raw_state == GPIO_PIN_RESET);
 				}
 
-				if (input_active)
-				{
-					status_string[char_idx++] = 'A' + i;
-				}
+				// Simpan status aktif (1) atau tidak aktif (0)
+				active_input_states[i] = input_active;
 
-				// Logika untuk input ke-8 (indeks 7) mengontrol output SR ke-13 (indeks 12)
-				if (i == LINKED_INPUT_INDEX)
+				// Cek status untuk input yang terhubung ke output (linked)
+				if (i == PIN_MASK_SENSOR_OLI)
 				{
 					current_linked_input_active_state = input_active;
 				}
 			}
 		}
 
-		// Update output SR yang terhubung jika state input terkait berubah
+		// ======================================================================
+		// Langkah 2: Update output yang terhubung
+		// sensor oli dengan pin buzzer
+		// ======================================================================
 		if (current_linked_input_active_state != last_linked_input_active_state)
 		{
+			// Hanya update output jika ada perubahan status input yang terhubung
 			if (current_linked_input_active_state)
-			{
-				current_sr_output_state |= (1 << LINKED_SR_OUTPUT_INDEX);
-#if DEBUG_MODE == 1
-				printf("Info: Input %d AKTIF, Output SR %d ON.\r\n",
-					   LINKED_INPUT_INDEX, LINKED_SR_OUTPUT_INDEX);
-#endif
-			}
+				current_sr_output_state |= (1 << PIN_OUTPUT_BUZZER);
 			else
-			{
-#if DEBUG_MODE == 1
-				current_sr_output_state &= ~(1 << LINKED_SR_OUTPUT_INDEX);
-				printf("Info: Input %d TIDAK AKTIF, Output SR %d OFF.\r\n",
-					   LINKED_INPUT_INDEX, LINKED_SR_OUTPUT_INDEX);
-#endif
-			}
+				current_sr_output_state &= ~(1 << PIN_OUTPUT_BUZZER);
+
 			SR_UpdateOutputs();
 			last_linked_input_active_state = current_linked_input_active_state;
 		}
 
-		if (char_idx > 0)
+		// ======================================================================
+		// Langkah 3: Bangun string output sesuai format "O:...|T:...|P:..."
+		// ======================================================================
+		int offset = 0;
+
+		// Grup 'O' (Input 1, 5, 6 -> Indeks 0, 4, 5)
+		offset += snprintf(final_output_buffer + offset, sizeof(final_output_buffer) - offset, "O:");
+		if (current_direction != 0) // timer oli aktif (m3 atau m4)
 		{
-			status_string[char_idx++] = '\r';
-			status_string[char_idx++] = '\n';
-			status_string[char_idx] = '\0';
-			printf("%s", status_string);
+			offset += snprintf(final_output_buffer + offset, sizeof(final_output_buffer) - offset, "M");
 		}
-		osDelay(100); // Pindai input setiap 100ms
+		if (current_sr_output_state & (1 << PIN_OUTPUT_OIL_PUMP)) // pompa oli aktif
+		{
+			offset += snprintf(final_output_buffer + offset, sizeof(final_output_buffer) - offset, "H");
+		}
+		if (active_input_states[PIN_MASK_SENSOR_OLI])
+		{
+			offset += snprintf(final_output_buffer + offset, sizeof(final_output_buffer) - offset, "E");
+		}
+
+		// Grup 'T' (Input pin proxy atc related, kecuali tools)
+		offset += snprintf(final_output_buffer + offset, sizeof(final_output_buffer) - offset, "|T:");
+		if (active_input_states[PIN_MASK_ORIENT_OK])
+		{
+			offset += snprintf(final_output_buffer + offset, sizeof(final_output_buffer) - offset, "O");
+		}
+		if (active_input_states[PIN_MASK_PROXY_UMB_A])
+		{
+			offset += snprintf(final_output_buffer + offset, sizeof(final_output_buffer) - offset, "F");
+		}
+		if (active_input_states[PIN_MASK_INPUT_UNCLAMP])
+		{
+			offset += snprintf(final_output_buffer + offset, sizeof(final_output_buffer) - offset, "U");
+		}
+		if (active_input_states[PIN_MASK_INPUT_CLAMP])
+		{
+			offset += snprintf(final_output_buffer + offset, sizeof(final_output_buffer) - offset, "L");
+		}
+		if (active_input_states[PIN_MASK_PROXY_UMB_B])
+		{
+			offset += snprintf(final_output_buffer + offset, sizeof(final_output_buffer) - offset, "B");
+		}
+
+		// Grup 'P' (Input proxy tools)
+		offset += snprintf(final_output_buffer + offset, sizeof(final_output_buffer) - offset, "|P:");
+		if (active_input_states[PIN_MASK_PROXY_TOOLS])
+		{
+			offset += snprintf(final_output_buffer + offset, sizeof(final_output_buffer) - offset, "1");
+		}
+		else
+		{
+			offset += snprintf(final_output_buffer + offset, sizeof(final_output_buffer) - offset, "0");
+		}
+
+		// Grup 'M' (ATC movement status)
+		offset += snprintf(final_output_buffer + offset, sizeof(final_output_buffer) - offset, "|M:");
+		offset += snprintf(final_output_buffer + offset, sizeof(final_output_buffer) - offset, "%c", g_last_atc_command);
+
+		// Grup 'L' (LED color status)
+		offset += snprintf(final_output_buffer + offset, sizeof(final_output_buffer) - offset, "|L:");
+		offset += snprintf(final_output_buffer + offset, sizeof(final_output_buffer) - offset, "%c", g_last_led_command);
+
+		// Finalisasi string dengan baris baru
+		snprintf(final_output_buffer + offset, sizeof(final_output_buffer) - offset, "\r\n");
+
+		// ======================================================================
+		// Langkah 4: Kirim seluruh string yang sudah diformat dalam satu kali panggilan
+		// ======================================================================
+		printf("%s", final_output_buffer);
+
+		// Tunggu sebelum memulai siklus pemindaian berikutnya
+		osDelay(100);
 	}
 	/* USER CODE END 5 */
 }
@@ -1580,7 +1680,8 @@ void StartOutputControlTask(void *argument)
 	/* USER CODE BEGIN StartOutputControlTask */
 	OutputCommand_t received_cmd;
 	osStatus_t status;
-	printf("OutputControlTask dimulai.\r\n");
+	DEBUG_PRINTF("OutputControlTask dimulai.\r\n");
+
 	/* Infinite loop */
 	for (;;)
 	{
@@ -1589,6 +1690,16 @@ void StartOutputControlTask(void *argument)
 
 		if (status == osOK)
 		{
+			if (strchr("ABC", received_cmd.command))
+			{
+				g_last_atc_command = received_cmd.command;
+			}
+			// Cek jika perintah untuk LED dan update status
+			else if (strchr("RDXZ", received_cmd.command))
+			{
+				g_last_led_command = received_cmd.command;
+			}
+
 			switch (received_cmd.command)
 			{
 			case 'H': // pin orientasi aktif
@@ -1615,17 +1726,17 @@ void StartOutputControlTask(void *argument)
 				current_sr_output_state &= ~(1 << PIN_OUTPUT_CLAMP);
 				SR_UpdateOutputs();
 				break;
-			case 'C': // pin atc nonaktif
+			case 'C': // pergerakan atc nonaktif
 				current_sr_output_state &= ~(1 << PIN_OUTPUT_ATC_CW);
 				current_sr_output_state &= ~(1 << PIN_OUTPUT_ATC_CCW);
 				SR_UpdateOutputs();
 				break;
-			case 'A': // pin atc CW
+			case 'A': // pergerakan atc CW
 				current_sr_output_state |= (1 << PIN_OUTPUT_ATC_CW);
 				current_sr_output_state &= ~(1 << PIN_OUTPUT_ATC_CCW);
 				SR_UpdateOutputs();
 				break;
-			case 'B': // pin atc CCW
+			case 'B': // pergerakan atc CCW
 				current_sr_output_state &= ~(1 << PIN_OUTPUT_ATC_CW);
 				current_sr_output_state |= (1 << PIN_OUTPUT_ATC_CCW);
 				SR_UpdateOutputs();
@@ -1645,14 +1756,14 @@ void StartOutputControlTask(void *argument)
 				current_sr_output_state |= (1 << PIN_OUTPUT_LED_GREEN);
 				SR_UpdateOutputs();
 				break;
-			case 'Z': // led mati
+			case 'Z': // led warna mati
 				current_sr_output_state &= ~(1 << PIN_OUTPUT_LED_RED);
 				current_sr_output_state &= ~(1 << PIN_OUTPUT_LED_GREEN);
 				SR_UpdateOutputs();
 				break;
 			default:
 				printf("Perintah output tidak dikenal: %c\r\n",
-					   received_cmd.command);
+							 received_cmd.command);
 			}
 		}
 		else if (status == osErrorTimeout)
@@ -1677,8 +1788,8 @@ void StartOutputControlTask(void *argument)
 void StartTimerOliTask(void *argument)
 {
 	/* USER CODE BEGIN StartTimerOliTask */
-	printf("BlinkingLedTask dimulai untuk Output SR %d.\r\n",
-		   BLINKING_LED_SR_OUTPUT_INDEX);
+	DEBUG_PRINTF("BlinkingLedTask dimulai untuk Output SR %d.\r\n",
+				 BLINKING_LED_SR_OUTPUT_INDEX);
 	/* Infinite loop */
 	for (;;)
 	{
@@ -1704,9 +1815,9 @@ void StartTimerOliTask(void *argument)
 void StartModbusSpindleTask(void *argument)
 {
 	/* USER CODE BEGIN StartModbusSpindleTask */
-	printf("ModbusSpindleControlTask dimulai.\r\n");
+	DEBUG_PRINTF("ModbusSpindleControlTask dimulai.\r\n");
 	uint32_t base_target_rpm = 0;
-	uint8_t current_direction = 0; // 0 = stop, 1 = CW, 2 = CCW
+	// uint8_t current_direction = 0; // 0 = stop, 1 = CW, 2 = CCW
 	uint8_t last_direction = 0xFF;
 	uint32_t last_sent_actual_rpm = 0xFFFFFFFF;
 	uint32_t ssv_cycle_start_time_ms = 0;
@@ -1720,17 +1831,11 @@ void StartModbusSpindleTask(void *argument)
 		uint8_t ccw_active = g_input_ccw_debounced_state;
 
 		if (cw_active && !ccw_active)
-		{
 			current_direction = 1;
-		}
 		else if (!cw_active && ccw_active)
-		{
 			current_direction = 2;
-		}
 		else
-		{
 			current_direction = 0;
-		}
 
 		base_target_rpm = Get_Spindle_RPM_From_PWM();
 		actual_rpm_to_send = base_target_rpm; // Default ke RPM dasar
@@ -1848,7 +1953,7 @@ void Error_Handler(void)
 	/* USER CODE BEGIN Error_Handler_Debug */
 	/* User can add his own implementation to report the HAL error return state */
 	__disable_irq();
-	printf("!!! ERROR HANDLER DIPANGGIL !!!\r\n");
+	DEBUG_PRINTF("!!! ERROR HANDLER DIPANGGIL !!!\r\n");
 	while (1)
 	{
 		HAL_GPIO_TogglePin(USER_LED_GPIO_Port, USER_LED_Pin);
@@ -1870,7 +1975,7 @@ void assert_failed(uint8_t *file, uint32_t line)
 {
 	/* USER CODE BEGIN 6 */
 	/* User can add his own implementation to report the file name and line number,
-	   ex: printf("Wrong parameters value: file %s on line %d\r\n", file, line) */
+	   ex: DEBUG_PRINTF("Wrong parameters value: file %s on line %d\r\n", file, line) */
 	/* USER CODE END 6 */
 }
 #endif /* USE_FULL_ASSERT */
